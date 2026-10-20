@@ -101,7 +101,7 @@ public final class LocalDownloadsUIState {
 
     public static final int REQ_PICK_PLAYLIST_COVER = 9101;
     public static final int REQ_PICK_THEME_WALLPAPER = 9102;
-    public static final int REQ_PICK_TRACK_COVER = 9103; // YENİ: Kapak değiştirme için
+    public static final int REQ_PICK_TRACK_COVER = 9103;
 
     public static final String PREF_NAME = "morphe_ui_theme_prefs";
     public static final String PREF_THEME_KEY = "selected_theme_palette";
@@ -109,6 +109,9 @@ public final class LocalDownloadsUIState {
     public static final String PREF_WALLPAPER_ACTIVE_KEY = "custom_wallpaper_active";
     public static final String PREF_SWIPE_TO_PLAY_NEXT_KEY = "swipe_to_play_next_enabled";
     public static final String CUSTOM_WALLPAPER_FILE = "custom_theme_wallpaper.jpg";
+
+    // GÖREV 2: Oynatıcı Seçimi (0 = Normal, 1 = Faye)
+    public static final String PREF_PLAYER_TYPE_KEY = "selected_player_type";
 
     public static final String PREF_EFFECTS_MASTER_KEY = "player_effects_master_enabled";
     public static final String PREF_ANIMATION_SPEED_KEY = "player_animation_speed_scale";
@@ -124,7 +127,6 @@ public final class LocalDownloadsUIState {
     public static final String PREF_CUSTOM_COLOR2_KEY = "player_custom_gradient_color2";
     public static final String PREF_VIBRANCY_KEY = "player_gradient_vibrancy";
 
-    // GÖREV 6: Crossfade ve Uyku Modu Ayarları
     public static final String PREF_CROSSFADE_ENABLED = "player_crossfade_enabled";
     public static final String PREF_CROSSFADE_SECONDS = "player_crossfade_seconds";
     public static final String PREF_SLEEP_FADE_ENABLED = "player_sleep_fade_enabled";
@@ -145,61 +147,34 @@ public final class LocalDownloadsUIState {
 
     public static final LruCache<String, Bitmap> ARTWORK_CACHE = new LruCache<>(90);
     public static final Map<String, CachedTrackEntry> TRACK_CACHE = new ConcurrentHashMap<>();
+    
+    // GÖREV 7: Sanatçı listesini her seferinde hesaplamak yerine önbelleğe alıyoruz (Performans)
+    private static List<String> cachedArtists = null;
 
     public record CachedTrackEntry(long lastModified, long length,
                                    long metadataLastModified, long metadataLength,
                                    OfflineTrack track) {}
 
     public enum ThemeAnimation {
-        STANDARD_PULSE,
-        GRIFFITH_FLOW,
-        FAYE_FLOW,
-        EVANGELION_PULSE,
-        EMERALD_GLOW,
-        SAPPHIRE_FLOW,
-        CRIMSON_WAVE,
-        AMETHYST_SHIMMER
+        STANDARD_PULSE, GRIFFITH_FLOW, FAYE_FLOW, EVANGELION_PULSE,
+        EMERALD_GLOW, SAPPHIRE_FLOW, CRIMSON_WAVE, AMETHYST_SHIMMER
     }
 
     public enum BackgroundColorMode {
-        THEME("Tema Renkleri"),
-        COVER("Albüm Kapağı Renkleri"),
-        CUSTOM("Serbest Renkler");
-
+        THEME("Tema Renkleri"), COVER("Albüm Kapağı Renkleri"), CUSTOM("Serbest Renkler");
         public final String label;
         BackgroundColorMode(String label) { this.label = label; }
     }
 
     public record EffectProfile(
-            String name,
-            String themeName,
-            boolean dynamicColors,
-            boolean breathing,
-            boolean halo,
-            boolean visualizer,
-            float speedScale,
-            float intensity,
-            boolean focusMode,
-            boolean lowPower,
-            BackgroundColorMode colorMode,
-            int customColor1,
-            int customColor2,
-            float vibrancy
+            String name, String themeName, boolean dynamicColors, boolean breathing,
+            boolean halo, boolean visualizer, float speedScale, float intensity,
+            boolean focusMode, boolean lowPower, BackgroundColorMode colorMode,
+            int customColor1, int customColor2, float vibrancy
     ) {}
 
-    public enum FilterMode {
-        ALL,
-        UNASSIGNED,
-        BROKEN_OR_INCOMPLETE
-    }
-
-    public enum SmartFilterMode {
-        NONE,
-        MOST_PLAYED,
-        RECENTLY_ADDED,
-        NIGHT_PLAYS,
-        NEVER_PLAYED
-    }
+    public enum FilterMode { ALL, UNASSIGNED, BROKEN_OR_INCOMPLETE }
+    public enum SmartFilterMode { NONE, MOST_PLAYED, RECENTLY_ADDED, NIGHT_PLAYS, NEVER_PLAYED }
 
     public enum SortOrder {
         DATE_DESC, ARTIST, TITLE, SIZE;
@@ -210,107 +185,23 @@ public final class LocalDownloadsUIState {
     }
 
     public enum ThemePalette {
-        YT_MUSIC_PINK(
-                "YT Müzik Pembe Tema",
-                Color.parseColor("#24071C"),
-                Color.parseColor("#140410"),
-                Color.parseColor("#090208"),
-                Color.parseColor("#FF2A70"),
-                Color.parseColor("#FF6E9E"),
-                Color.argb(42, 255, 180, 215),
-                Color.argb(75, 255, 80, 145),
-                Color.parseColor("#FFFFFF")
-        ),
-        AMOLED_NIGHT(
-                "AMOLED Gece",
-                Color.parseColor("#0A0A0C"),
-                Color.parseColor("#040406"),
-                Color.parseColor("#000000"),
-                Color.parseColor("#FF2A70"),
-                Color.parseColor("#00E5FF"),
-                Color.argb(36, 255, 255, 255),
-                Color.argb(60, 255, 255, 255),
-                Color.parseColor("#FFFFFF")
-        ),
-        EMERALD_DEPTH(
-                "Zümrüt Derinliği",
-                Color.parseColor("#07261E"),
-                Color.parseColor("#041511"),
-                Color.parseColor("#020A08"),
-                Color.parseColor("#10B981"),
-                Color.parseColor("#34D399"),
-                Color.argb(40, 16, 185, 129),
-                Color.argb(75, 52, 211, 153),
-                Color.parseColor("#041511")
-        ),
-        SAPPHIRE_OCEAN(
-                "Safir Okyanus",
-                Color.parseColor("#0A1931"),
-                Color.parseColor("#060E1E"),
-                Color.parseColor("#030710"),
-                Color.parseColor("#3B82F6"),
-                Color.parseColor("#60A5FA"),
-                Color.argb(40, 59, 130, 246),
-                Color.argb(75, 96, 165, 250),
-                Color.parseColor("#FFFFFF")
-        ),
-        CRIMSON_VELVET(
-                "Kızıl Kadife",
-                Color.parseColor("#3B0711"),
-                Color.parseColor("#1C0408"),
-                Color.parseColor("#0A0203"),
-                Color.parseColor("#F43F5E"),
-                Color.parseColor("#FB7185"),
-                Color.argb(40, 244, 63, 94),
-                Color.argb(75, 251, 113, 133),
-                Color.parseColor("#FFFFFF")
-        ),
-        ROYAL_AMETHYST(
-                "Asil Ametist",
-                Color.parseColor("#240E3B"),
-                Color.parseColor("#130721"),
-                Color.parseColor("#08030F"),
-                Color.parseColor("#A855F7"),
-                Color.parseColor("#C084FC"),
-                Color.argb(40, 168, 85, 247),
-                Color.argb(75, 192, 132, 252),
-                Color.parseColor("#FFFFFF")
-        ),
-        EVANGELION("Evangelion • Neon Genesis",
-                Color.parseColor("#17102D"), Color.parseColor("#090B19"), Color.parseColor("#03050B"),
-                Color.parseColor("#A855F7"), Color.parseColor("#B6FF00"),
-                Color.argb(42, 168, 85, 247), Color.argb(85, 182, 255, 0), Color.parseColor("#FFFFFF")),
-        GRIFFITH("Berserk • Griffith",
-                Color.parseColor("#292B36"), Color.parseColor("#12131A"), Color.parseColor("#07070B"),
-                Color.parseColor("#E6E8F0"), Color.parseColor("#8E2945"),
-                Color.argb(38, 230, 232, 240), Color.argb(75, 142, 41, 69), Color.parseColor("#101116")),
-        FAYE("Cowboy Bebop • Faye",
-                Color.parseColor("#35164A"), Color.parseColor("#1B0D2B"), Color.parseColor("#090511"),
-                Color.parseColor("#C77DFF"), Color.parseColor("#FFD166"),
-                Color.argb(46, 199, 125, 255), Color.argb(92, 255, 209, 102), Color.parseColor("#21112E"));
+        YT_MUSIC_PINK("YT Müzik Pembe Tema", Color.parseColor("#24071C"), Color.parseColor("#140410"), Color.parseColor("#090208"), Color.parseColor("#FF2A70"), Color.parseColor("#FF6E9E"), Color.argb(42, 255, 180, 215), Color.argb(75, 255, 80, 145), Color.parseColor("#FFFFFF")),
+        AMOLED_NIGHT("AMOLED Gece", Color.parseColor("#0A0A0C"), Color.parseColor("#040406"), Color.parseColor("#000000"), Color.parseColor("#FF2A70"), Color.parseColor("#00E5FF"), Color.argb(36, 255, 255, 255), Color.argb(60, 255, 255, 255), Color.parseColor("#FFFFFF")),
+        EMERALD_DEPTH("Zümrüt Derinliği", Color.parseColor("#07261E"), Color.parseColor("#041511"), Color.parseColor("#020A08"), Color.parseColor("#10B981"), Color.parseColor("#34D399"), Color.argb(40, 16, 185, 129), Color.argb(75, 52, 211, 153), Color.parseColor("#041511")),
+        SAPPHIRE_OCEAN("Safir Okyanus", Color.parseColor("#0A1931"), Color.parseColor("#060E1E"), Color.parseColor("#030710"), Color.parseColor("#3B82F6"), Color.parseColor("#60A5FA"), Color.argb(40, 59, 130, 246), Color.argb(75, 96, 165, 250), Color.parseColor("#FFFFFF")),
+        CRIMSON_VELVET("Kızıl Kadife", Color.parseColor("#3B0711"), Color.parseColor("#1C0408"), Color.parseColor("#0A0203"), Color.parseColor("#F43F5E"), Color.parseColor("#FB7185"), Color.argb(40, 244, 63, 94), Color.argb(75, 251, 113, 133), Color.parseColor("#FFFFFF")),
+        ROYAL_AMETHYST("Asil Ametist", Color.parseColor("#240E3B"), Color.parseColor("#130721"), Color.parseColor("#08030F"), Color.parseColor("#A855F7"), Color.parseColor("#C084FC"), Color.argb(40, 168, 85, 247), Color.argb(75, 192, 132, 252), Color.parseColor("#FFFFFF")),
+        EVANGELION("Evangelion • Neon Genesis", Color.parseColor("#17102D"), Color.parseColor("#090B19"), Color.parseColor("#03050B"), Color.parseColor("#A855F7"), Color.parseColor("#B6FF00"), Color.argb(42, 168, 85, 247), Color.argb(85, 182, 255, 0), Color.parseColor("#FFFFFF")),
+        GRIFFITH("Berserk • Griffith", Color.parseColor("#292B36"), Color.parseColor("#12131A"), Color.parseColor("#07070B"), Color.parseColor("#E6E8F0"), Color.parseColor("#8E2945"), Color.argb(38, 230, 232, 240), Color.argb(75, 142, 41, 69), Color.parseColor("#101116")),
+        FAYE("Cowboy Bebop • Faye", Color.parseColor("#35164A"), Color.parseColor("#1B0D2B"), Color.parseColor("#090511"), Color.parseColor("#C77DFF"), Color.parseColor("#FFD166"), Color.argb(46, 199, 125, 255), Color.argb(92, 255, 209, 102), Color.parseColor("#21112E"));
 
         public final String label;
-        public final int varBgTop;
-        public final int varBgMid;
-        public final int varBgBottom;
-        public final int varAccentPrimary;
-        public final int varAccentSecondary;
-        public final int varGlassSurface;
-        public final int varGlassBorder;
-        public final int varOnAccent;
+        public final int varBgTop, varBgMid, varBgBottom, varAccentPrimary, varAccentSecondary, varGlassSurface, varGlassBorder, varOnAccent;
 
-        ThemePalette(String label, int varBgTop, int varBgMid, int varBgBottom,
-                     int varAccentPrimary, int varAccentSecondary,
-                     int varGlassSurface, int varGlassBorder, int varOnAccent) {
-            this.label = label;
-            this.varBgTop = varBgTop;
-            this.varBgMid = varBgMid;
-            this.varBgBottom = varBgBottom;
-            this.varAccentPrimary = varAccentPrimary;
-            this.varAccentSecondary = varAccentSecondary;
-            this.varGlassSurface = varGlassSurface;
-            this.varGlassBorder = varGlassBorder;
-            this.varOnAccent = varOnAccent;
+        ThemePalette(String label, int varBgTop, int varBgMid, int varBgBottom, int varAccentPrimary, int varAccentSecondary, int varGlassSurface, int varGlassBorder, int varOnAccent) {
+            this.label = label; this.varBgTop = varBgTop; this.varBgMid = varBgMid; this.varBgBottom = varBgBottom;
+            this.varAccentPrimary = varAccentPrimary; this.varAccentSecondary = varAccentSecondary;
+            this.varGlassSurface = varGlassSurface; this.varGlassBorder = varGlassBorder; this.varOnAccent = varOnAccent;
         }
     }
 
@@ -319,18 +210,14 @@ public final class LocalDownloadsUIState {
     public static boolean playlistGridMode = true;
     public static boolean swipeToPlayNext = true;
     public static boolean showingPlaylistsOverview = true;
-    
-    // GÖREV 1: History kaldırıldı, Artists eklendi
     public static boolean showingArtists = false;
+    
     @Nullable public static String selectedArtist = null;
-
     public static SmartFilterMode currentSmartFilter = SmartFilterMode.NONE;
     public static FilterMode currentFilterMode = FilterMode.ALL;
     public static boolean selectionMode = false;
     public static boolean diskReloadNeeded = true;
     public static boolean animateNextSongList = true;
-
-    // GÖREV 3: Şarkı sözü senkron kaydırma offseti (milisaniye)
     public static long lyricsOffsetMs = 0;
 
     public static List<OfflineTrack> tracks = new ArrayList<>();
@@ -342,7 +229,7 @@ public final class LocalDownloadsUIState {
 
     @Nullable public static String selectedPlaylist = null;
     @Nullable public static String pendingCoverPlaylistName = null;
-    @Nullable public static String pendingCoverTrackId = null; // GÖREV 5 için eklendi
+    @Nullable public static String pendingCoverTrackId = null;
     @Nullable public static Bitmap customWallpaperBitmap = null;
     public static String playingPath = "";
     public static String query = "";
@@ -430,6 +317,17 @@ public final class LocalDownloadsUIState {
         Utils.showToastShort("Özel duvar kağıdı sıfırlandı");
     }
 
+    public static boolean isPlayer2FayeSelected(Context ctx) {
+        if (ctx == null) return false;
+        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getInt(PREF_PLAYER_TYPE_KEY, 0) == 1;
+    }
+
+    public static void setPlayer2FayeSelected(Context ctx, boolean selected) {
+        if (ctx == null) return;
+        ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+                .edit().putInt(PREF_PLAYER_TYPE_KEY, selected ? 1 : 0).apply();
+    }
+
     public static void refreshAllThemeVisuals(LocalDownloadsFragment fragment) {
         Context ctx = fragment != null ? fragment.getActivity() : Utils.getContext();
         applyListBackground(rootLayout);
@@ -437,9 +335,7 @@ public final class LocalDownloadsUIState {
         if (headerLayout != null) {
             LocalDownloadsAnimator.animateBackgroundColorChange(headerLayout, currentTheme.varBgTop);
         }
-        if (summary != null) {
-            summary.setTextColor(primaryTextColor());
-        }
+        if (summary != null) summary.setTextColor(primaryTextColor());
         if (headerFilterBtn != null && ctx != null) {
             headerFilterBtn.setImageDrawable(createVectorIconDrawable(ctx, ICON_FILTER, activeAccentColor(), 0));
             headerFilterBtn.setBackground(iconRippleDrawable());
@@ -486,27 +382,20 @@ public final class LocalDownloadsUIState {
         if (bottomNavLayout != null && ctx != null) {
             LocalDownloadsHeader.refreshBottomNavigationTheme(ctx);
         }
-        if (fragment != null) {
-            fragment.showTracks();
-        }
+        if (fragment != null) fragment.showTracks();
+        
         LocalDownloadsPlayer.updateDynamicPlayerColors(ctx);
     }
 
-    /** Primary foreground used by theme-aware labels and neutral header controls. */
     public static int primaryTextColor() {
-        return currentTheme == ThemePalette.FAYE
-                ? Color.parseColor("#FFE7A3")
-                : Color.WHITE;
+        return currentTheme == ThemePalette.FAYE ? Color.parseColor("#FFE7A3") : Color.WHITE;
     }
 
     public static int activeAccentColor() { return currentTheme.varAccentPrimary; }
     public static int activeSecondaryAccent() { return currentTheme.varAccentSecondary; }
 
-    /** Muted text keeps the Faye palette warm without sacrificing contrast on dark surfaces. */
     public static int secondary() {
-        return currentTheme == ThemePalette.FAYE
-                ? Color.parseColor("#CDBBD9")
-                : Color.argb(180, 235, 230, 240);
+        return currentTheme == ThemePalette.FAYE ? Color.parseColor("#CDBBD9") : Color.argb(180, 235, 230, 240);
     }
 
     public static int dp(Context ctx, int val) {
@@ -966,7 +855,6 @@ public final class LocalDownloadsUIState {
         popup.show();
     }
 
-    /** Hides the keyboard after a completed search without clearing the query/results. */
     public static void finishSearchInput(Context ctx) {
         EditText field = searchBar;
         if (field == null || ctx == null) return;
@@ -1035,6 +923,9 @@ public final class LocalDownloadsUIState {
         }
         playlists = OfflineStorage.loadPlaylists(musicRoot);
         if (selectedPlaylist != null && findPlaylist(selectedPlaylist) == null) selectedPlaylist = null;
+        
+        // Sanatçı önbelleğini geçersiz kıl (yeniden yükleme yapıldı)
+        invalidateArtistCache();
     }
 
     @Nullable
@@ -1096,8 +987,14 @@ public final class LocalDownloadsUIState {
         return set;
     }
 
-    // GÖREV 1: Sanatçı Rafı için yardımcı metod
+    public static void invalidateArtistCache() {
+        cachedArtists = null;
+    }
+
+    // GÖREV 7: Sanatçı Rafı için performans optimizasyonu (Önbellekli Liste)
     public static List<String> getAllArtists() {
+        if (cachedArtists != null) return cachedArtists;
+
         Set<String> artists = new HashSet<>();
         for (OfflineTrack t : tracks) {
             String artist = t.displayArtist();
@@ -1107,22 +1004,19 @@ public final class LocalDownloadsUIState {
         }
         List<String> sortedArtists = new ArrayList<>(artists);
         sortedArtists.sort(String::compareToIgnoreCase);
-        return sortedArtists;
+        cachedArtists = sortedArtists;
+        return cachedArtists;
     }
 
     public static boolean isBrokenOrIncompleteTrack(OfflineTrack t) {
-        return t.durationSeconds() <= 0
-                || t.title().isBlank()
-                || t.title().equals(t.videoId())
-                || t.audioFile().length() < 32 * 1024;
+        return t.durationSeconds() <= 0 || t.title().isBlank() || t.title().equals(t.videoId()) || t.audioFile().length() < 32 * 1024;
     }
 
     public static void markPlayingRow(Context ctx) {
         if (ctx == null) return;
         int idx = queuePaths.indexOf(playingPath);
         for (int i = 0; i < rowViews.size(); i++) {
-            boolean isSel = i < currentDisplayedTracks.size()
-                    && selectedVideoIds.contains(currentDisplayedTracks.get(i).videoId());
+            boolean isSel = i < currentDisplayedTracks.size() && selectedVideoIds.contains(currentDisplayedTracks.get(i).videoId());
             rowViews.get(i).setBackground(rowBackground(ctx, i == idx || isSel));
         }
     }
@@ -1139,9 +1033,7 @@ public final class LocalDownloadsUIState {
 
     public static String formatSpeed(long bytesPerSec) {
         if (bytesPerSec <= 0) return "0 KB/sn";
-        if (bytesPerSec >= 1048576L) {
-            return String.format(Locale.ROOT, "%.2f MB/sn", bytesPerSec / 1048576.0);
-        }
+        if (bytesPerSec >= 1048576L) return String.format(Locale.ROOT, "%.2f MB/sn", bytesPerSec / 1048576.0);
         return String.format(Locale.ROOT, "%d KB/sn", Math.max(1L, bytesPerSec / 1024L));
     }
 
@@ -1183,10 +1075,6 @@ public final class LocalDownloadsUIState {
         hostWindowStateCaptured = false;
     }
 
-    // =====================================================================================
-    // OYNATICI EFEKT TERCİHLERİ
-    // =====================================================================================
-
     public static ThemeAnimation getAnimationForTheme(ThemePalette theme) {
         if (theme == null) return ThemeAnimation.STANDARD_PULSE;
         switch (theme) {
@@ -1201,9 +1089,7 @@ public final class LocalDownloadsUIState {
         }
     }
 
-    public static ThemeAnimation getCurrentAnimation() {
-        return getAnimationForTheme(currentTheme);
-    }
+    public static ThemeAnimation getCurrentAnimation() { return getAnimationForTheme(currentTheme); }
 
     private static SharedPreferences effectsPrefs(Context ctx) {
         return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
@@ -1263,17 +1149,11 @@ public final class LocalDownloadsUIState {
         return isEffectsMasterEnabled(ctx) && !isLowPowerMode(ctx) && isHaloEnabled(ctx);
     }
 
-    public static boolean isVisualizerEffectivelyEnabled(Context ctx) {
-        return isEffectsMasterEnabled(ctx) && !isLowPowerMode(ctx) && isVisualizerEnabled(ctx);
-    }
-
     public static float getAnimationSpeedScale(Context ctx) {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_ANIMATION_SPEED_KEY, DEFAULT_ANIMATION_SPEED);
             return Math.max(MIN_ANIMATION_SPEED, Math.min(MAX_ANIMATION_SPEED, v));
-        } catch (Exception ignored) {
-            return DEFAULT_ANIMATION_SPEED;
-        }
+        } catch (Exception ignored) { return DEFAULT_ANIMATION_SPEED; }
     }
 
     public static void setAnimationSpeedScale(Context ctx, float v) {
@@ -1287,9 +1167,7 @@ public final class LocalDownloadsUIState {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_ANIMATION_INTENSITY_KEY, DEFAULT_ANIMATION_INTENSITY);
             return Math.max(MIN_ANIMATION_INTENSITY, Math.min(MAX_ANIMATION_INTENSITY, v));
-        } catch (Exception ignored) {
-            return DEFAULT_ANIMATION_INTENSITY;
-        }
+        } catch (Exception ignored) { return DEFAULT_ANIMATION_INTENSITY; }
     }
 
     public static void setAnimationIntensity(Context ctx, float v) {
@@ -1307,24 +1185,20 @@ public final class LocalDownloadsUIState {
     }
 
     public static boolean isPlayerCoverBreathingEnabled(Context ctx) {
-        try {
-            return effectsPrefs(ctx).getBoolean("player_cover_breathing", true);
-        } catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_cover_breathing", true); }
+        catch (Exception ignored) { return true; }
     }
 
     public static boolean isPlayerDynamicColorsEnabled(Context ctx) {
-        try {
-            return effectsPrefs(ctx).getBoolean("player_dynamic_artwork_colors", true);
-        } catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_dynamic_artwork_colors", true); }
+        catch (Exception ignored) { return true; }
     }
 
     public static boolean isPlayerCinematicTransitionsEnabled(Context ctx) {
-        try {
-            return effectsPrefs(ctx).getBoolean("player_cinematic_transitions", true);
-        } catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_cinematic_transitions", true); }
+        catch (Exception ignored) { return true; }
     }
 
-    // GÖREV 6: Crossfade ve Sleep Fade Ayarları
     public static boolean isCrossfadeEnabled(Context ctx) {
         try { return effectsPrefs(ctx).getBoolean(PREF_CROSSFADE_ENABLED, false); }
         catch (Exception ignored) { return false; }
@@ -1355,30 +1229,22 @@ public final class LocalDownloadsUIState {
         catch (Exception ignored) {}
     }
 
-    // =====================================================================================
-    // ARKA PLAN RENK MODU (Tema / Kapak / Serbest)
-    // =====================================================================================
-
     public static BackgroundColorMode getBackgroundColorMode(Context ctx) {
         try {
             String raw = effectsPrefs(ctx).getString(PREF_BG_COLOR_MODE_KEY, BackgroundColorMode.THEME.name());
             return BackgroundColorMode.valueOf(raw);
-        } catch (Exception ignored) {
-            return BackgroundColorMode.THEME;
-        }
+        } catch (Exception ignored) { return BackgroundColorMode.THEME; }
     }
 
     public static void setBackgroundColorMode(Context ctx, BackgroundColorMode mode) {
         try {
-            effectsPrefs(ctx).edit().putString(PREF_BG_COLOR_MODE_KEY,
-                    (mode == null ? BackgroundColorMode.THEME : mode).name()).apply();
+            effectsPrefs(ctx).edit().putString(PREF_BG_COLOR_MODE_KEY, (mode == null ? BackgroundColorMode.THEME : mode).name()).apply();
         } catch (Exception ignored) {}
     }
 
     public static int getCustomGradientColor1(Context ctx) {
-        try {
-            return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR1_KEY, DEFAULT_CUSTOM_COLOR1);
-        } catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR1; }
+        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR1_KEY, DEFAULT_CUSTOM_COLOR1); }
+        catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR1; }
     }
 
     public static void setCustomGradientColor1(Context ctx, int color) {
@@ -1387,9 +1253,8 @@ public final class LocalDownloadsUIState {
     }
 
     public static int getCustomGradientColor2(Context ctx) {
-        try {
-            return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR2_KEY, DEFAULT_CUSTOM_COLOR2);
-        } catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR2; }
+        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR2_KEY, DEFAULT_CUSTOM_COLOR2); }
+        catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR2; }
     }
 
     public static void setCustomGradientColor2(Context ctx, int color) {
@@ -1401,9 +1266,7 @@ public final class LocalDownloadsUIState {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_VIBRANCY_KEY, DEFAULT_VIBRANCY);
             return Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, v));
-        } catch (Exception ignored) {
-            return DEFAULT_VIBRANCY;
-        }
+        } catch (Exception ignored) { return DEFAULT_VIBRANCY; }
     }
 
     public static void setGradientVibrancy(Context ctx, float v) {
@@ -1413,7 +1276,6 @@ public final class LocalDownloadsUIState {
         } catch (Exception ignored) {}
     }
 
-    /** Doygunluğu artırıp azaltarak canlılık katar; 1.0 orijinal. */
     public static int applyVibrancy(int color, float vibrancy) {
         if (vibrancy <= 0f) vibrancy = 1f;
         float[] hsv = new float[3];
@@ -1423,7 +1285,6 @@ public final class LocalDownloadsUIState {
         return Color.HSVToColor(Color.alpha(color), hsv);
     }
 
-    /** 2 renkten 5 duraklı yumuşak geçiş paleti üretir. */
     public static int[] buildCustomGradient(int c1, int c2) {
         int mid = blendColors(c1, c2, 0.5f);
         return new int[]{c1, mid, c2, mid, c1};
@@ -1433,32 +1294,19 @@ public final class LocalDownloadsUIState {
         if (ctx == null) return new int[]{Color.BLACK, Color.WHITE};
         BackgroundColorMode mode = getBackgroundColorMode(ctx);
         float vibrancy = getGradientVibrancy(ctx);
-
         int[] base;
         switch (mode) {
             case COVER: {
-                int dominant = track != null
-                        ? track.extractDominantColor(currentTheme.varAccentPrimary)
-                        : currentTheme.varAccentPrimary;
+                int dominant = track != null ? track.extractDominantColor(currentTheme.varAccentPrimary) : currentTheme.varAccentPrimary;
                 int complement = complementOf(dominant);
                 base = buildCustomGradient(dominant, complement);
                 break;
             }
-            case CUSTOM: {
-                base = buildCustomGradient(getCustomGradientColor1(ctx), getCustomGradientColor2(ctx));
-                break;
-            }
-            case THEME:
-            default: {
-                base = LocalDownloadsAnimator.getThemeGradientPalette(currentTheme);
-                break;
-            }
+            case CUSTOM: base = buildCustomGradient(getCustomGradientColor1(ctx), getCustomGradientColor2(ctx)); break;
+            case THEME: default: base = LocalDownloadsAnimator.getThemeGradientPalette(currentTheme); break;
         }
-
         int[] out = new int[base.length];
-        for (int i = 0; i < base.length; i++) {
-            out[i] = applyVibrancy(base[i], vibrancy);
-        }
+        for (int i = 0; i < base.length; i++) out[i] = applyVibrancy(base[i], vibrancy);
         return out;
     }
 
@@ -1469,23 +1317,12 @@ public final class LocalDownloadsUIState {
         int c1, c2;
         switch (mode) {
             case COVER: {
-                c1 = track != null ? track.extractDominantColor(currentTheme.varAccentPrimary)
-                        : currentTheme.varAccentPrimary;
+                c1 = track != null ? track.extractDominantColor(currentTheme.varAccentPrimary) : currentTheme.varAccentPrimary;
                 c2 = complementOf(c1);
                 break;
             }
-            case CUSTOM: {
-                c1 = getCustomGradientColor1(ctx);
-                c2 = getCustomGradientColor2(ctx);
-                break;
-            }
-            case THEME:
-            default: {
-                int[] t = LocalDownloadsAnimator.getHaloColors(currentTheme);
-                c1 = t[0];
-                c2 = t[1];
-                break;
-            }
+            case CUSTOM: { c1 = getCustomGradientColor1(ctx); c2 = getCustomGradientColor2(ctx); break; }
+            case THEME: default: { int[] t = LocalDownloadsAnimator.getHaloColors(currentTheme); c1 = t[0]; c2 = t[1]; break; }
         }
         return new int[]{applyVibrancy(c1, vibrancy), applyVibrancy(c2, vibrancy)};
     }
@@ -1510,26 +1347,17 @@ public final class LocalDownloadsUIState {
                 if (o == null) continue;
                 try {
                     BackgroundColorMode mode;
-                    try {
-                        mode = BackgroundColorMode.valueOf(
-                                o.optString("colorMode", BackgroundColorMode.THEME.name()));
-                    } catch (Exception e) { mode = BackgroundColorMode.THEME; }
+                    try { mode = BackgroundColorMode.valueOf(o.optString("colorMode", BackgroundColorMode.THEME.name())); }
+                    catch (Exception e) { mode = BackgroundColorMode.THEME; }
 
                     out.add(new EffectProfile(
-                            o.optString("name", ""),
-                            o.optString("themeName", ThemePalette.YT_MUSIC_PINK.name()),
-                            o.optBoolean("dynamicColors", true),
-                            o.optBoolean("breathing", true),
-                            o.optBoolean("halo", true),
-                            o.optBoolean("visualizer", false),
-                            (float) o.optDouble("speedScale", DEFAULT_ANIMATION_SPEED),
-                            (float) o.optDouble("intensity", DEFAULT_ANIMATION_INTENSITY),
-                            o.optBoolean("focusMode", false),
-                            o.optBoolean("lowPower", false),
-                            mode,
-                            o.optInt("customColor1", DEFAULT_CUSTOM_COLOR1),
-                            o.optInt("customColor2", DEFAULT_CUSTOM_COLOR2),
-                            (float) o.optDouble("vibrancy", DEFAULT_VIBRANCY)
+                            o.optString("name", ""), o.optString("themeName", ThemePalette.YT_MUSIC_PINK.name()),
+                            o.optBoolean("dynamicColors", true), o.optBoolean("breathing", true),
+                            o.optBoolean("halo", true), o.optBoolean("visualizer", false),
+                            (float) o.optDouble("speedScale", DEFAULT_ANIMATION_SPEED), (float) o.optDouble("intensity", DEFAULT_ANIMATION_INTENSITY),
+                            o.optBoolean("focusMode", false), o.optBoolean("lowPower", false),
+                            mode, o.optInt("customColor1", DEFAULT_CUSTOM_COLOR1),
+                            o.optInt("customColor2", DEFAULT_CUSTOM_COLOR2), (float) o.optDouble("vibrancy", DEFAULT_VIBRANCY)
                     ));
                 } catch (Exception ignored) {}
             }
@@ -1543,20 +1371,10 @@ public final class LocalDownloadsUIState {
         List<EffectProfile> profiles = getSavedEffectProfiles(ctx);
         profiles.removeIf(p -> p.name().equalsIgnoreCase(trimmed));
         profiles.add(new EffectProfile(
-                trimmed,
-                currentTheme.name(),
-                isPlayerDynamicColorsEnabled(ctx),
-                isPlayerCoverBreathingEnabled(ctx),
-                isHaloEnabled(ctx),
-                isVisualizerEnabled(ctx),
-                getAnimationSpeedScale(ctx),
-                getAnimationIntensity(ctx),
-                isFocusMode(ctx),
-                isLowPowerMode(ctx),
-                getBackgroundColorMode(ctx),
-                getCustomGradientColor1(ctx),
-                getCustomGradientColor2(ctx),
-                getGradientVibrancy(ctx)
+                trimmed, currentTheme.name(), isPlayerDynamicColorsEnabled(ctx), isPlayerCoverBreathingEnabled(ctx),
+                isHaloEnabled(ctx), isVisualizerEnabled(ctx), getAnimationSpeedScale(ctx), getAnimationIntensity(ctx),
+                isFocusMode(ctx), isLowPowerMode(ctx), getBackgroundColorMode(ctx), getCustomGradientColor1(ctx),
+                getCustomGradientColor2(ctx), getGradientVibrancy(ctx)
         ));
         writeProfiles(ctx, profiles);
         return true;
@@ -1587,17 +1405,13 @@ public final class LocalDownloadsUIState {
             e.putFloat(PREF_ANIMATION_INTENSITY_KEY, Math.max(MIN_ANIMATION_INTENSITY, Math.min(MAX_ANIMATION_INTENSITY, profile.intensity())));
             e.putBoolean(PREF_FOCUS_MODE_KEY, profile.focusMode());
             e.putBoolean(PREF_LOW_POWER_MODE_KEY, profile.lowPower());
-            e.putString(PREF_BG_COLOR_MODE_KEY,
-                    (profile.colorMode() == null ? BackgroundColorMode.THEME : profile.colorMode()).name());
+            e.putString(PREF_BG_COLOR_MODE_KEY, (profile.colorMode() == null ? BackgroundColorMode.THEME : profile.colorMode()).name());
             e.putInt(PREF_CUSTOM_COLOR1_KEY, profile.customColor1());
             e.putInt(PREF_CUSTOM_COLOR2_KEY, profile.customColor2());
-            e.putFloat(PREF_VIBRANCY_KEY,
-                    Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, profile.vibrancy())));
+            e.putFloat(PREF_VIBRANCY_KEY, Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, profile.vibrancy())));
             e.apply();
             return true;
-        } catch (Exception ignored) {
-            return false;
-        }
+        } catch (Exception ignored) { return false; }
     }
 
     private static void writeProfiles(Context ctx, List<EffectProfile> profiles) {
@@ -1622,7 +1436,6 @@ public final class LocalDownloadsUIState {
                 arr.put(o);
             }
             effectsPrefs(ctx).edit().putString(PREF_EFFECT_PROFILES_KEY, arr.toString()).apply();
-        } catch (JSONException ignored) {
-        } catch (Exception ignored) {}
+        } catch (JSONException ignored) {} catch (Exception ignored) {}
     }
 }

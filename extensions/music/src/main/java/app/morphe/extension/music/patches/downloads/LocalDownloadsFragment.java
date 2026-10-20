@@ -84,16 +84,13 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         OfflineIntegrationPatch.guardBackButton(activity);
         LocalDownloadsUIState.applyListBackground(rootLayout);
 
-        rootLayout.addView(LocalDownloadsHeader.createHeader(activity, this),
-                new LinearLayout.LayoutParams(-1, -2));
+        rootLayout.addView(LocalDownloadsHeader.createHeader(activity, this), new LinearLayout.LayoutParams(-1, -2));
 
         LocalDownloadsUIState.downloadBanner = createLiveDownloadBanner(activity);
-        rootLayout.addView(LocalDownloadsUIState.downloadBanner,
-                new LinearLayout.LayoutParams(-1, -2));
+        rootLayout.addView(LocalDownloadsUIState.downloadBanner, new LinearLayout.LayoutParams(-1, -2));
 
         LocalDownloadsUIState.batchActionBar = createBatchSelectionBar(activity);
-        rootLayout.addView(LocalDownloadsUIState.batchActionBar,
-                new LinearLayout.LayoutParams(-1, -2));
+        rootLayout.addView(LocalDownloadsUIState.batchActionBar, new LinearLayout.LayoutParams(-1, -2));
 
         FrameLayout contentFrame = new FrameLayout(activity);
         contentFrame.setElevation(LocalDownloadsUIState.dp(activity, Z_INDEX_CONTENT));
@@ -103,12 +100,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         
         LocalDownloadsUIState.songsList = new LinearLayout(activity);
         LocalDownloadsUIState.songsList.setOrientation(LinearLayout.VERTICAL);
-        LocalDownloadsUIState.songsList.setPadding(
-                LocalDownloadsUIState.dp(activity, 12),
-                LocalDownloadsUIState.dp(activity, 6),
-                LocalDownloadsUIState.dp(activity, 12),
-                LocalDownloadsUIState.dp(activity, 88)
-        );
+        LocalDownloadsUIState.songsList.setPadding(LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 6), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 88));
         scroll.addView(LocalDownloadsUIState.songsList);
         contentFrame.addView(scroll, new FrameLayout.LayoutParams(-1, -1));
 
@@ -119,26 +111,14 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         fabPlus.setTextColor(LocalDownloadsUIState.currentTheme.varOnAccent);
         fabPlus.setGravity(Gravity.CENTER);
         fabPlus.setElevation(LocalDownloadsUIState.dp(activity, Z_INDEX_FAB));
-        GradientDrawable fabBg = new GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                new int[]{LocalDownloadsUIState.activeAccentColor(), LocalDownloadsUIState.activeSecondaryAccent()});
+        GradientDrawable fabBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{LocalDownloadsUIState.activeAccentColor(), LocalDownloadsUIState.activeSecondaryAccent()});
         fabBg.setShape(GradientDrawable.OVAL);
-        fabPlus.setBackground(new RippleDrawable(
-                ColorStateList.valueOf(Color.argb(70, 255, 255, 255)), fabBg, fabBg));
+        fabPlus.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(70, 255, 255, 255)), fabBg, fabBg));
         fabPlus.setOnClickListener(v -> showCreateOrAutoDownloadPlaylistDialog(null, null));
         LocalDownloadsUIState.fabPlusButton = fabPlus;
 
-        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(
-                LocalDownloadsUIState.dp(activity, 56),
-                LocalDownloadsUIState.dp(activity, 56),
-                Gravity.BOTTOM | Gravity.END
-        );
-        fabLp.setMargins(
-                LocalDownloadsUIState.dp(activity, 16),
-                LocalDownloadsUIState.dp(activity, 16),
-                LocalDownloadsUIState.dp(activity, 18),
-                LocalDownloadsUIState.dp(activity, 18)
-        );
+        FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 56), LocalDownloadsUIState.dp(activity, 56), Gravity.BOTTOM | Gravity.END);
+        fabLp.setMargins(LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 18), LocalDownloadsUIState.dp(activity, 18));
         contentFrame.addView(fabPlus, fabLp);
 
         rootLayout.addView(contentFrame, new LinearLayout.LayoutParams(-1, 0, 1f));
@@ -158,19 +138,13 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         showTracks();
         refreshDownloadStatusUI();
 
-        // Subtle entrance motion for the offline library; respect the shared
-        // animation-duration setting so reduced/short animations stay consistent.
         final LinearLayout entranceRoot = rootLayout;
         entranceRoot.setAlpha(0f);
         entranceRoot.setTranslationY(LocalDownloadsUIState.dp(activity, 8));
         entranceRoot.post(() -> {
             if (entranceRoot.getParent() == null) return;
             entranceRoot.animate().cancel();
-            entranceRoot.animate()
-                    .alpha(1f)
-                    .translationY(0f)
-                    .setDuration(LocalDownloadsUIState.scaleDuration(activity, 220L))
-                    .start();
+            entranceRoot.animate().alpha(1f).translationY(0f).setDuration(LocalDownloadsUIState.scaleDuration(activity, 220L)).start();
         });
         return rootLayout;
     }
@@ -200,7 +174,6 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     @Override
     public void onDestroyView() {
         Activity act = getActivity();
-        // Stop view-owned motion before the fragment hierarchy is released.
         if (rootLayout != null) {
             try {
                 rootLayout.animate().cancel();
@@ -210,6 +183,10 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         }
         LocalDownloadsUIState.restoreHostHeader(act);
         OfflineHeaderBlocker.detach(act);
+        
+        // GÖREV 4: Uygulamadan çıkıldığında veya ekran yeniden oluşturulduğunda oynatıcı referanslarını temizle
+        LocalDownloadsPlayer.resetPlayerState();
+        
         rootLayout = null;
         super.onDestroyView();
     }
@@ -220,8 +197,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             LocalDownloadsPlayer.dismissFullPlayerIfShowing();
             return;
         }
-        if (LocalDownloadsUIState.searchBar != null
-                && LocalDownloadsUIState.searchBar.getVisibility() == View.VISIBLE) {
+        if (LocalDownloadsUIState.searchBar != null && LocalDownloadsUIState.searchBar.getVisibility() == View.VISIBLE) {
             LocalDownloadsUIState.toggleSearch(act);
             return;
         }
@@ -231,13 +207,9 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             showTracks();
             return;
         }
-        if (!LocalDownloadsUIState.showingPlaylistsOverview
-                || LocalDownloadsUIState.selectedPlaylist != null
-                || LocalDownloadsUIState.showingArtists
-                || LocalDownloadsUIState.currentSmartFilter != LocalDownloadsUIState.SmartFilterMode.NONE
-                || LocalDownloadsUIState.currentFilterMode != LocalDownloadsUIState.FilterMode.ALL) {
+        if (!LocalDownloadsUIState.showingPlaylistsOverview || LocalDownloadsUIState.selectedPlaylist != null || LocalDownloadsUIState.showingArtists || LocalDownloadsUIState.currentSmartFilter != LocalDownloadsUIState.SmartFilterMode.NONE || LocalDownloadsUIState.currentFilterMode != LocalDownloadsUIState.FilterMode.ALL) {
             
-            LocalDownloadsFragment.requestLibraryTransition(false); // Geriye dönerken soldan gelsin
+            LocalDownloadsFragment.requestLibraryTransition(false);
             LocalDownloadsUIState.selectedPlaylist = null;
             LocalDownloadsUIState.selectedArtist = null;
             LocalDownloadsUIState.showingArtists = false;
@@ -245,7 +217,6 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
             LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL;
             
-            // Liste giriş animasyonlarını sıfırla ki üst üste binmesin
             LocalDownloadsUIState.animateNextSongList = false;
             showTracks();
             if (act != null) LocalDownloadsHeader.refreshBottomNavigationTheme(act);
@@ -259,10 +230,9 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         if (act == null || LocalDownloadsUIState.songsList == null) return;
 
         if (animateNextTransition) {
-            animateNextTransition = false; // Tek seferlik tüket
+            animateNextTransition = false;
             View target = mainScroll != null ? mainScroll : LocalDownloadsUIState.songsList;
-            LocalDownloadsAnimator.animateLibraryTransition(target, transitionFromRight,
-                    () -> LocalDownloadsListRenderer.renderTracksAndPlaylists(act, musicRoot, this));
+            LocalDownloadsAnimator.animateLibraryTransition(target, transitionFromRight, () -> LocalDownloadsListRenderer.renderTracksAndPlaylists(act, musicRoot, this));
         } else {
             LocalDownloadsListRenderer.renderTracksAndPlaylists(act, musicRoot, this);
         }
@@ -274,39 +244,14 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         LocalDownloadsPlayer.showFullScreenPlayer(act, this);
     }
 
-    public void showSettingsDialog() {
-        LocalDownloadsDialogs.showSettingsDialog(getActivity(), this);
-    }
-
-    public void showDownloadManagerDialog() {
-        LocalDownloadsDialogs.showDownloadManagerDialog(getActivity(), this);
-    }
-
-    public void showLyricsLibraryDialog() {
-        LocalDownloadsDialogs.showLyricsLibraryDialog(getActivity(), this);
-    }
-
-    public void showManualLyricsSearchDialog(OfflineTrack track, @Nullable Runnable onComplete) {
-        LocalDownloadsDialogs.showManualLyricsSearchDialog(getActivity(), track, onComplete, this);
-    }
-
-    public void showTrackBottomSheet(OfflineTrack track) {
-        LocalDownloadsDialogs.showTrackBottomSheet(getActivity(), track, this);
-    }
-
-    public void showCreateOrAutoDownloadPlaylistDialog(@Nullable OfflineTrack trackToAdd,
-                                                       @Nullable OfflineStorage.Playlist existingPlaylist) {
-        LocalDownloadsDialogs.showCreateOrAutoDownloadPlaylistDialog(
-                getActivity(), musicRoot, trackToAdd, existingPlaylist, this);
-    }
-
-    public void showChangePlaylistCoverDialog(View anchor, OfflineStorage.Playlist pl, List<OfflineTrack> plTracks) {
-        LocalDownloadsDialogs.showChangePlaylistCoverDialog(getActivity(), anchor, pl, plTracks, this);
-    }
-
-    public void showPlaylistActionsMenu(View anchor, OfflineStorage.Playlist pl) {
-        LocalDownloadsDialogs.showPlaylistActionsMenu(getActivity(), anchor, pl, this);
-    }
+    public void showSettingsDialog() { LocalDownloadsDialogs.showSettingsDialog(getActivity(), this); }
+    public void showDownloadManagerDialog() { LocalDownloadsDialogs.showDownloadManagerDialog(getActivity(), this); }
+    public void showLyricsLibraryDialog() { LocalDownloadsDialogs.showLyricsLibraryDialog(getActivity(), this); }
+    public void showManualLyricsSearchDialog(OfflineTrack track, @Nullable Runnable onComplete) { LocalDownloadsDialogs.showManualLyricsSearchDialog(getActivity(), track, onComplete, this); }
+    public void showTrackBottomSheet(OfflineTrack track) { LocalDownloadsDialogs.showTrackBottomSheet(getActivity(), track, this); }
+    public void showCreateOrAutoDownloadPlaylistDialog(@Nullable OfflineTrack trackToAdd, @Nullable OfflineStorage.Playlist existingPlaylist) { LocalDownloadsDialogs.showCreateOrAutoDownloadPlaylistDialog(getActivity(), musicRoot, trackToAdd, existingPlaylist, this); }
+    public void showChangePlaylistCoverDialog(View anchor, OfflineStorage.Playlist pl, List<OfflineTrack> plTracks) { LocalDownloadsDialogs.showChangePlaylistCoverDialog(getActivity(), anchor, pl, plTracks, this); }
+    public void showPlaylistActionsMenu(View anchor, OfflineStorage.Playlist pl) { LocalDownloadsDialogs.showPlaylistActionsMenu(getActivity(), anchor, pl, this); }
 
     @Override
     public void onDownloadStateChanged(String videoId, boolean completed) {
@@ -325,28 +270,17 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     public void onPlaybackChanged(String path, String title, boolean playing, int position, int duration) {
         Activity activity = getActivity();
         if (activity == null) return;
-        activity.runOnUiThread(() ->
-                LocalDownloadsPlayer.handlePlaybackChanged(activity, path, title, playing, position, duration));
+        activity.runOnUiThread(() -> LocalDownloadsPlayer.handlePlaybackChanged(activity, path, title, playing, position, duration));
     }
 
     private LinearLayout createLiveDownloadBanner(Context ctx) {
         LinearLayout box = new LinearLayout(ctx);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 8),
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 8)
-        );
+        box.setPadding(LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 8));
         box.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 12), true));
 
         LinearLayout.LayoutParams boxLp = new LinearLayout.LayoutParams(-1, -2);
-        boxLp.setMargins(
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 2),
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 6)
-        );
+        boxLp.setMargins(LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 2), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 6));
         box.setLayoutParams(boxLp);
 
         LinearLayout topRow = new LinearLayout(ctx);
@@ -390,8 +324,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
 
         LocalDownloadsUIState.downloadBannerProgress = new ProgressBar(ctx, null, android.R.attr.progressBarStyleHorizontal);
         LocalDownloadsUIState.downloadBannerProgress.setMax(100);
-        LocalDownloadsUIState.downloadBannerProgress.setProgressDrawable(
-                LocalDownloadsUIState.createThemeProgressDrawable(LocalDownloadsUIState.dp(ctx, 4), true));
+        LocalDownloadsUIState.downloadBannerProgress.setProgressDrawable(LocalDownloadsUIState.createThemeProgressDrawable(LocalDownloadsUIState.dp(ctx, 4), true));
         LinearLayout.LayoutParams progLp = new LinearLayout.LayoutParams(-1, LocalDownloadsUIState.dp(ctx, 5));
         progLp.setMargins(0, LocalDownloadsUIState.dp(ctx, 6), 0, 0);
         box.addView(LocalDownloadsUIState.downloadBannerProgress, progLp);
@@ -404,12 +337,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     private LinearLayout createBatchSelectionBar(Context ctx) {
         LinearLayout bar = new LinearLayout(ctx);
         bar.setOrientation(LinearLayout.VERTICAL);
-        bar.setPadding(
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 8),
-                LocalDownloadsUIState.dp(ctx, 12),
-                LocalDownloadsUIState.dp(ctx, 8)
-        );
+        bar.setPadding(LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 8));
         bar.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 12), true));
 
         LinearLayout top = new LinearLayout(ctx);
@@ -438,12 +366,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         quickRow.setPadding(0, LocalDownloadsUIState.dp(ctx, 6), 0, 0);
 
         TextView selectAllBtn = LocalDownloadsUIState.createPillButton(ctx, "Tümünü Seç", false);
-        selectAllBtn.setOnClickListener(v -> {
-            for (OfflineTrack t : LocalDownloadsUIState.currentDisplayedTracks) {
-                LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
-            }
-            showTracks();
-        });
+        selectAllBtn.setOnClickListener(v -> { for (OfflineTrack t : LocalDownloadsUIState.currentDisplayedTracks) LocalDownloadsUIState.selectedVideoIds.add(t.videoId()); showTracks(); });
         quickRow.addView(selectAllBtn);
 
         LinearLayout.LayoutParams oLp = new LinearLayout.LayoutParams(-2, -2);
@@ -453,9 +376,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         selectOrphansBtn.setLayoutParams(oLp);
         selectOrphansBtn.setOnClickListener(v -> {
             Set<String> inPlaylists = LocalDownloadsUIState.getAllPlaylistTrackIds();
-            for (OfflineTrack t : LocalDownloadsUIState.tracks) {
-                if (!inPlaylists.contains(t.videoId())) LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
-            }
+            for (OfflineTrack t : LocalDownloadsUIState.tracks) if (!inPlaylists.contains(t.videoId())) LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
             showTracks();
         });
         quickRow.addView(selectOrphansBtn);
@@ -463,31 +384,19 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         TextView selectBrokenBtn = LocalDownloadsUIState.createPillButton(ctx, "Hatalıları Seç", false);
         selectBrokenBtn.setLayoutParams(oLp);
         selectBrokenBtn.setOnClickListener(v -> {
-            for (OfflineTrack t : LocalDownloadsUIState.tracks) {
-                if (LocalDownloadsUIState.isBrokenOrIncompleteTrack(t)) {
-                    LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
-                }
-            }
+            for (OfflineTrack t : LocalDownloadsUIState.tracks) if (LocalDownloadsUIState.isBrokenOrIncompleteTrack(t)) LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
             showTracks();
         });
         quickRow.addView(selectBrokenBtn);
 
         TextView clearSelBtn = LocalDownloadsUIState.createPillButton(ctx, "Seçimi Temizle", false);
         clearSelBtn.setLayoutParams(oLp);
-        clearSelBtn.setOnClickListener(v -> {
-            LocalDownloadsUIState.selectedVideoIds.clear();
-            showTracks();
-        });
+        clearSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectedVideoIds.clear(); showTracks(); });
         quickRow.addView(clearSelBtn);
 
         TextView closeSelBtn = LocalDownloadsUIState.createPillButton(ctx, "✕ Kapat", false);
         closeSelBtn.setLayoutParams(oLp);
-        closeSelBtn.setOnClickListener(v -> {
-            LocalDownloadsUIState.selectionMode = false;
-            LocalDownloadsUIState.selectedVideoIds.clear();
-            LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL;
-            showTracks();
-        });
+        closeSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectionMode = false; LocalDownloadsUIState.selectedVideoIds.clear(); LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL; showTracks(); });
         quickRow.addView(closeSelBtn);
 
         quickScroll.addView(quickRow);
@@ -506,30 +415,19 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             } else {
                 LocalDownloadsUIState.downloadBanner.setVisibility(View.VISIBLE);
                 LocalDownloadManager.QueueItem activeItem = null;
-                for (LocalDownloadManager.QueueItem item : queue) {
-                    if (item.active()) {
-                        activeItem = item;
-                        break;
-                    }
-                }
+                for (LocalDownloadManager.QueueItem item : queue) if (item.active()) { activeItem = item; break; }
                 if (activeItem == null) activeItem = queue.get(0);
 
                 String statusPrefix = paused ? "⏸ Duraklatıldı: " : "⬇️ İndiriliyor: ";
-                String speedStr = activeItem.speedBytesPerSec() > 0
-                        ? " • " + LocalDownloadsUIState.formatSpeed(activeItem.speedBytesPerSec())
-                        : "";
+                String speedStr = activeItem.speedBytesPerSec() > 0 ? " • " + LocalDownloadsUIState.formatSpeed(activeItem.speedBytesPerSec()) : "";
                 LocalDownloadsUIState.downloadBannerTitle.setText(statusPrefix + activeItem.title());
-                LocalDownloadsUIState.downloadBannerSub.setText("Kuyrukta " + queue.size()
-                        + " şarkı • " + activeItem.playlistName()
-                        + " • %" + activeItem.progress() + speedStr);
+                LocalDownloadsUIState.downloadBannerSub.setText("Kuyrukta " + queue.size() + " şarkı • " + activeItem.playlistName() + " • %" + activeItem.progress() + speedStr);
                 LocalDownloadsAnimator.animateProgress(LocalDownloadsUIState.downloadBannerProgress, Math.max(2, Math.min(100, activeItem.progress())));
                 LocalDownloadsUIState.downloadBannerPauseBtn.setText(paused ? "▶ Devam" : "⏸ Duraklat");
             }
         }
 
-        if (LocalDownloadsUIState.queueManagerDialog != null
-                && LocalDownloadsUIState.queueManagerDialog.isShowing()
-                && LocalDownloadsUIState.queueDialogListContainer != null) {
+        if (LocalDownloadsUIState.queueManagerDialog != null && LocalDownloadsUIState.queueManagerDialog.isShowing() && LocalDownloadsUIState.queueDialogListContainer != null) {
             LocalDownloadsDialogs.populateQueueDialogItems(getActivity(), queue, paused, this);
         }
     }
@@ -538,8 +436,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         try {
             Intent share = new Intent(Intent.ACTION_SEND);
             share.setType("text/plain");
-            share.putExtra(Intent.EXTRA_TEXT, track.displayTitle() + " - " + track.displayArtist()
-                    + "\nhttps://music.youtube.com/watch?v=" + track.videoId());
+            share.putExtra(Intent.EXTRA_TEXT, track.displayTitle() + " - " + track.displayArtist() + "\nhttps://music.youtube.com/watch?v=" + track.videoId());
             startActivity(Intent.createChooser(share, "Şarkıyı Paylaş"));
         } catch (Exception ignored) {}
     }
@@ -550,9 +447,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             intent.setType("image/*");
             intent.addCategory(Intent.CATEGORY_OPENABLE);
             startActivityForResult(Intent.createChooser(intent, "Görsel Seçin"), requestCode);
-        } catch (Exception ex) {
-            Utils.showToastShort("Galeri açılamadı");
-        }
+        } catch (Exception ex) { Utils.showToastShort("Galeri açılamadı"); }
     }
 
     @Override
@@ -569,27 +464,19 @@ public final class LocalDownloadsFragment extends PreferenceFragment
                 if (raw == null) return null;
                 Bitmap scaled = scaleDownBitmap(raw, 1080);
 
-                if (requestCode == LocalDownloadsUIState.REQ_PICK_PLAYLIST_COVER
-                        && LocalDownloadsUIState.pendingCoverPlaylistName != null) {
+                if (requestCode == LocalDownloadsUIState.REQ_PICK_PLAYLIST_COVER && LocalDownloadsUIState.pendingCoverPlaylistName != null) {
                     OfflineStorage.setPlaylistCoverBitmap(musicRoot, LocalDownloadsUIState.pendingCoverPlaylistName, scaled);
                     LocalDownloadsUIState.ARTWORK_CACHE.evictAll();
                     LocalDownloadsUIState.diskReloadNeeded = true;
-                    Utils.runOnMainThread(() -> {
-                        Utils.showToastShort("Oynatma listesi kapağı güncellendi");
-                        showTracks();
-                    });
+                    Utils.runOnMainThread(() -> { Utils.showToastShort("Oynatma listesi kapağı güncellendi"); showTracks(); });
                 } else if (requestCode == LocalDownloadsUIState.REQ_PICK_THEME_WALLPAPER) {
                     if (!musicRoot.isDirectory()) musicRoot.mkdirs();
                     OfflineStorage.writeJpeg(new File(musicRoot, LocalDownloadsUIState.CUSTOM_WALLPAPER_FILE), scaled);
                     LocalDownloadsUIState.customWallpaperActive = true;
                     LocalDownloadsUIState.savePreferences(act);
                     LocalDownloadsUIState.reloadCustomWallpaper(musicRoot);
-                    Utils.runOnMainThread(() -> {
-                        Utils.showToastShort("Özel duvar kağıdı kaydedildi");
-                        LocalDownloadsUIState.refreshAllThemeVisuals(this);
-                    });
+                    Utils.runOnMainThread(() -> { Utils.showToastShort("Özel duvar kağıdı kaydedildi"); LocalDownloadsUIState.refreshAllThemeVisuals(this); });
                 } else if (requestCode == LocalDownloadsUIState.REQ_PICK_TRACK_COVER) {
-                    // GÖREV 5: Tekil şarkı kapağını güncelle
                     if (LocalDownloadsUIState.pendingCoverTrackId != null) {
                         String vid = LocalDownloadsUIState.pendingCoverTrackId;
                         File customCoverFile = new File(musicRoot, vid + "_custom.jpg");
@@ -602,8 +489,6 @@ public final class LocalDownloadsFragment extends PreferenceFragment
                         Utils.runOnMainThread(() -> {
                             Utils.showToastShort("✓ Şarkı kapağı başarıyla güncellendi");
                             showTracks();
-                            
-                            // Eğer çalan şarkıysa oynatıcıyı da güncelle
                             OfflineTrack updatedTrack = LocalDownloadsUIState.findById(vid);
                             if (updatedTrack != null && LocalDownloadsUIState.playingPath.equals(updatedTrack.audioFile().getAbsolutePath())) {
                                 LocalDownloadsPlayer.applyTrackVisuals(act, updatedTrack);
@@ -621,59 +506,46 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     }
 
     private static Bitmap scaleDownBitmap(Bitmap src, int maxDimension) {
-        int w = src.getWidth();
-        int h = src.getHeight();
+        int w = src.getWidth(), h = src.getHeight();
         if (w <= maxDimension && h <= maxDimension) return src;
         float ratio = Math.min((float) maxDimension / w, (float) maxDimension / h);
         return Bitmap.createScaledBitmap(src, Math.max(1, Math.round(w * ratio)), Math.max(1, Math.round(h * ratio)), true);
     }
 
     public void confirmCancelAllDownloads() {
-        confirm("İndirmeleri Durdur",
-                "Bekleyen ve aktif olan tüm indirmeler iptal edilip yarım kalan (.part) dosyalar silinsin mi?",
-                () -> {
-                    LocalDownloadManager.cancelAllDownloads(musicRoot);
-                    cleanPartFiles();
-                    refreshDownloadStatusUI();
-                    Utils.showToastShort("Tüm indirmeler durduruldu");
-                });
+        confirm("İndirmeleri Durdur", "Bekleyen ve aktif olan tüm indirmeler iptal edilip yarım kalan (.part) dosyalar silinsin mi?", () -> {
+            LocalDownloadManager.cancelAllDownloads(musicRoot);
+            cleanPartFiles();
+            refreshDownloadStatusUI();
+            Utils.showToastShort("Tüm indirmeler durduruldu");
+        });
     }
 
     public void confirmDeleteSelectedTracks() {
-        if (LocalDownloadsUIState.selectedVideoIds.isEmpty()) {
-            Utils.showToastShort("Önce silinecek şarkıları seçin");
-            return;
-        }
+        if (LocalDownloadsUIState.selectedVideoIds.isEmpty()) { Utils.showToastShort("Önce silinecek şarkıları seçin"); return; }
         long bytes = 0;
         List<OfflineTrack> toDelete = new ArrayList<>();
         for (OfflineTrack t : LocalDownloadsUIState.tracks) {
-            if (LocalDownloadsUIState.selectedVideoIds.contains(t.videoId())) {
-                toDelete.add(t);
-                bytes += t.audioFile().length();
-            }
+            if (LocalDownloadsUIState.selectedVideoIds.contains(t.videoId())) { toDelete.add(t); bytes += t.audioFile().length(); }
         }
-        confirm("Seçilenleri Topluca Sil",
-                toDelete.size() + " şarkı (" + LocalDownloadsUIState.formatSize(bytes) + " MB) cihazdan kalıcı olarak silinsin mi?",
-                () -> {
-                    for (OfflineTrack t : toDelete) {
-                        OfflineStorage.delete(t.audioFile());
-                        deleteSidecars(t.videoId());
-                        OfflineStorage.removeTrackFromAllPlaylists(musicRoot, t.videoId());
-                        LocalDownloadsUIState.TRACK_CACHE.remove(t.audioFile().getAbsolutePath());
-                    }
-                    LocalDownloadsUIState.selectedVideoIds.clear();
-                    LocalDownloadsUIState.diskReloadNeeded = true;
-                    showTracks();
-                    Utils.showToastShort(toDelete.size() + " şarkı silindi");
-                });
+        confirm("Seçilenleri Topluca Sil", toDelete.size() + " şarkı (" + LocalDownloadsUIState.formatSize(bytes) + " MB) cihazdan kalıcı olarak silinsin mi?", () -> {
+            for (OfflineTrack t : toDelete) {
+                OfflineStorage.delete(t.audioFile());
+                deleteSidecars(t.videoId());
+                OfflineStorage.removeTrackFromAllPlaylists(musicRoot, t.videoId());
+                LocalDownloadsUIState.TRACK_CACHE.remove(t.audioFile().getAbsolutePath());
+            }
+            LocalDownloadsUIState.selectedVideoIds.clear();
+            LocalDownloadsUIState.diskReloadNeeded = true;
+            showTracks();
+            Utils.showToastShort(toDelete.size() + " şarkı silindi");
+        });
     }
 
     public void confirmDeletePlaylist(String playlistName) {
         confirm("Listeyi Sil", "\"" + playlistName + "\" oynatma listesi silinsin mi?", () -> {
             OfflineStorage.deletePlaylist(musicRoot, playlistName);
-            if (playlistName.equalsIgnoreCase(LocalDownloadsUIState.selectedPlaylist)) {
-                LocalDownloadsUIState.selectedPlaylist = null;
-            }
+            if (playlistName.equalsIgnoreCase(LocalDownloadsUIState.selectedPlaylist)) LocalDownloadsUIState.selectedPlaylist = null;
             LocalDownloadsUIState.diskReloadNeeded = true;
             showTracks();
             Utils.showToastShort("Liste silindi");
@@ -681,20 +553,17 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     }
 
     public void confirmDelete(OfflineTrack track) {
-        confirm(str("morphe_music_downloads_delete_track_title"),
-                str("morphe_music_downloads_delete_track_message", track.displayTitle()), () -> deleteTrack(track));
+        confirm(str("morphe_music_downloads_delete_track_title"), str("morphe_music_downloads_delete_track_message", track.displayTitle()), () -> deleteTrack(track));
     }
 
     public void confirmDeleteAll() {
         if (!LocalDownloadsUIState.tracks.isEmpty()) {
-            confirm(str("morphe_music_downloads_delete_all_title"),
-                    str("morphe_music_downloads_delete_all_message"), this::deleteAll);
+            confirm(str("morphe_music_downloads_delete_all_title"), str("morphe_music_downloads_delete_all_message"), this::deleteAll);
         }
     }
 
     public void confirm(String title, String message, Runnable onConfirm) {
-        CustomDialog.create(getActivity(), title, message, null, str("morphe_music_downloads_delete"),
-                onConfirm, () -> {}, null, null, false).first.show();
+        CustomDialog.create(getActivity(), title, message, null, str("morphe_music_downloads_delete"), onConfirm, () -> {}, null, null, false).first.show();
     }
 
     public void deleteAll() {
@@ -718,10 +587,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         OfflineStorage.removeTrackFromAllPlaylists(musicRoot, t.videoId());
         LocalDownloadsUIState.TRACK_CACHE.remove(t.audioFile().getAbsolutePath());
         LocalDownloadsUIState.selectedVideoIds.remove(t.videoId());
-        if (!deleted) {
-            Utils.showToastShort(str("morphe_music_downloads_track_delete_failed"));
-            return;
-        }
+        if (!deleted) { Utils.showToastShort(str("morphe_music_downloads_track_delete_failed")); return; }
         LocalDownloadsUIState.diskReloadNeeded = true;
         showTracks();
         Utils.showToastShort(str("morphe_music_downloads_track_deleted"));
@@ -730,7 +596,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     public void deleteSidecars(String id) {
         OfflineStorage.delete(new File(musicRoot, id + ".json"));
         OfflineStorage.delete(new File(musicRoot, id + ".jpg"));
-        OfflineStorage.delete(new File(musicRoot, id + "_custom.jpg")); // GÖREV 5: Özel kapağı da sil
+        OfflineStorage.delete(new File(musicRoot, id + "_custom.jpg"));
         OfflineStorage.delete(new File(musicRoot, id + ".lrc"));
         OfflineStorage.delete(new File(musicRoot, id + ".webm.part"));
         OfflineStorage.delete(new File(musicRoot, id + ".m4a.part"));
@@ -740,10 +606,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         int count = 0;
         File[] partFiles = musicRoot.listFiles(f -> f.isFile() && f.getName().endsWith(".part"));
         if (partFiles != null) {
-            for (File f : partFiles) {
-                OfflineStorage.delete(f);
-                count++;
-            }
+            for (File f : partFiles) { OfflineStorage.delete(f); count++; }
         }
         return count;
     }

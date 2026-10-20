@@ -53,10 +53,6 @@ public final class OfflineTrack {
         this.durationSeconds = 0;
     }
 
-    // =====================================================================================
-    // YÜKLEME / KAYDETME
-    // =====================================================================================
-
     public static OfflineTrack load(File audioFile) {
         OfflineTrack track = new OfflineTrack(audioFile);
         track.readMetadata();
@@ -133,7 +129,6 @@ public final class OfflineTrack {
         }
     }
 
-    /** Çalma istatistiğini (playCount, nightPlayCount, lastPlayedAt) günceller. */
     public static void recordPlayEvent(File audioFile, boolean isNight) {
         try {
             if (audioFile == null || !audioFile.isFile()) return;
@@ -145,7 +140,6 @@ public final class OfflineTrack {
         } catch (Exception ignored) {}
     }
 
-    /** GÖREV 5: Şarkı başlığını, sanatçısını ve albümünü günceller. */
     public boolean updateMetadata(File musicRoot, String newTitle, String newArtist, String newAlbum) {
         try {
             this.title = newTitle == null || newTitle.isBlank() ? videoId : newTitle;
@@ -158,43 +152,25 @@ public final class OfflineTrack {
         }
     }
 
-    // =====================================================================================
-    // ERİŞİCİLER
-    // =====================================================================================
-
     public File audioFile() { return audioFile; }
-
     public String videoId() { return videoId; }
-
-    /** Ham başlık: meta veri boşsa video ID'sini döner. */
     public String title() { return title == null || title.isBlank() ? videoId : title; }
-
     public String displayTitle() { return title(); }
-
     public String artist() { return artist == null ? "" : artist; }
-
-    public String displayArtist() {
-        return artist == null || artist.isBlank() ? "Bilinmeyen Sanatçı" : artist;
-    }
-
+    public String displayArtist() { return artist == null || artist.isBlank() ? "Bilinmeyen Sanatçı" : artist; }
     public String album() { return album == null ? "" : album; }
-
-    public String displayAlbum() {
-        return album == null || album.isBlank() ? "Tekli" : album;
-    }
-
+    public String displayAlbum() { return album == null || album.isBlank() ? "Tekli" : album; }
     public int durationSeconds() { return durationSeconds; }
-
     public long lastPlayedAt() { return lastPlayedAt; }
-
     public int playCount() { return playCount; }
-
     public int nightPlayCount() { return nightPlayCount; }
 
-    /**
-     * Şarkı kapağı dosyası. Kullanıcı kapağı değiştirdiyse `_custom.jpg`
-     * dosyası, aksi halde orijinal `videoId.jpg` dosyası döner.
-     */
+    // GÖREV 6: Şarkı süresini formatlı döndürme
+    public String formattedDuration() {
+        if (durationSeconds <= 0) return "--:--";
+        return String.format(Locale.ROOT, "%d:%02d", durationSeconds / 60, durationSeconds % 60);
+    }
+
     public File artworkFile() {
         File custom = new File(audioFile.getParentFile(), videoId + "_custom.jpg");
         if (custom.isFile()) return custom;
@@ -212,10 +188,6 @@ public final class OfflineTrack {
         return OfflineStorage.decodeArtwork(f, maxSize);
     }
 
-    /**
-     * Albüm kapağından bir dominant renk çıkarır.
-     * Kapak yoksa verilen fallback rengi döner.
-     */
     public int extractDominantColor(int fallback) {
         try {
             File f = artworkFile();
@@ -244,18 +216,6 @@ public final class OfflineTrack {
         }
     }
 
-    // =====================================================================================
-    // LRC ŞARKI SÖZLERİ
-    // =====================================================================================
-
-    /**
-     * `.lrc` dosyasını zaman damgalı LyricLine listesine çevirir.
-     * - `[mm:ss.xx]` veya `[mm:ss.xxx]` formatındaki satırlar senkron satırdır.
-     * - `└ 🇹🇷 ...` ve `└ TR: ...` çeviri satırları da aynı `timeMs` değeriyle eklenir.
-     *   (Bu çeviri prefix'leri UI tarafında `showSyncedLyricsDialog`'da ayıklanır.)
-     * - Zaman damgası olmayan düz metin (şiir) satırları, sıralarını korumak için
-     *   4 saniyelik yapay zaman damgalarıyla eklenir.
-     */
     public List<LyricLine> loadSynchronizedLyrics() {
         List<LyricLine> out = new ArrayList<>();
         try {
@@ -274,9 +234,7 @@ public final class OfflineTrack {
                     int minutes = Integer.parseInt(m.group(1));
                     int seconds = Integer.parseInt(m.group(2));
                     String frac = m.group(3);
-                    int millis = frac.length() == 2
-                            ? Integer.parseInt(frac) * 10
-                            : Integer.parseInt(frac);
+                    int millis = frac.length() == 2 ? Integer.parseInt(frac) * 10 : Integer.parseInt(frac);
                     long timeMs = minutes * 60_000L + seconds * 1_000L + millis;
                     String text = m.group(4).trim();
                     if (!text.isEmpty()) {
@@ -293,11 +251,6 @@ public final class OfflineTrack {
         return out;
     }
 
-    // =====================================================================================
-    // YARDIMCI METOTLAR
-    // =====================================================================================
-
-    /** Dosya boyutunu okunabilir MB cinsinden döner. */
     public String displaySize() {
         long len = audioFile.length();
         return String.format(Locale.ROOT, "%.1f MB", len / 1_048_576.0);

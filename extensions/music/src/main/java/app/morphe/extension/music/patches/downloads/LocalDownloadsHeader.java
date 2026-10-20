@@ -39,26 +39,18 @@ public final class LocalDownloadsHeader {
         LinearLayout.LayoutParams headerLp = new LinearLayout.LayoutParams(-1, -2);
         headerLp.topMargin = 0;
         header.setLayoutParams(headerLp);
-        header.setPadding(
-                LocalDownloadsUIState.dp(ctx, 14),
-                LocalDownloadsUIState.dp(ctx, 8),
-                LocalDownloadsUIState.dp(ctx, 14),
-                LocalDownloadsUIState.dp(ctx, 6)
-        );
+        header.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 6));
         LocalDownloadsUIState.headerLayout = header;
 
-        LocalDownloadsUIState.searchBar = CustomDialog.createSearchBar(
-                ctx, str("morphe_music_downloads_search_hint"), text -> {
-                    LocalDownloadsUIState.query = text.trim().toLowerCase(Locale.ROOT);
-                    fragment.showTracks();
-                });
+        LocalDownloadsUIState.searchBar = CustomDialog.createSearchBar(ctx, str("morphe_music_downloads_search_hint"), text -> {
+            LocalDownloadsUIState.query = text.trim().toLowerCase(Locale.ROOT);
+            fragment.showTracks();
+        });
         LocalDownloadsUIState.searchBar.setSingleLine(true);
         LocalDownloadsUIState.searchBar.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         LocalDownloadsUIState.searchBar.setOnEditorActionListener((view, actionId, event) -> {
-            boolean searchAction = actionId == EditorInfo.IME_ACTION_SEARCH
-                    || actionId == EditorInfo.IME_ACTION_DONE
-                    || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
-                    && event.getAction() == KeyEvent.ACTION_UP);
+            boolean searchAction = actionId == EditorInfo.IME_ACTION_SEARCH || actionId == EditorInfo.IME_ACTION_DONE
+                    || (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_UP);
             if (!searchAction) return false;
             LocalDownloadsUIState.query = view.getText().toString().trim().toLowerCase(Locale.ROOT);
             fragment.showTracks();
@@ -98,81 +90,42 @@ public final class LocalDownloadsHeader {
         LocalDownloadsUIState.summary.setEllipsize(TextUtils.TruncateAt.END);
         line.addView(LocalDownloadsUIState.summary, new LinearLayout.LayoutParams(0, -2, 1f));
 
-        LocalDownloadsUIState.selectModeBtn = LocalDownloadsUIState.icon(
-                ctx,
-                LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_CHECKLIST, LocalDownloadsUIState.primaryTextColor(), 0),
-                "Toplu Seçim"
-        );
+        LocalDownloadsUIState.selectModeBtn = LocalDownloadsUIState.icon(ctx, LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_CHECKLIST, LocalDownloadsUIState.primaryTextColor(), 0), "Toplu Seçim");
         LocalDownloadsUIState.selectModeBtn.setOnClickListener(v -> {
             LocalDownloadsUIState.selectionMode = !LocalDownloadsUIState.selectionMode;
             if (!LocalDownloadsUIState.selectionMode) LocalDownloadsUIState.selectedVideoIds.clear();
             fragment.showTracks();
         });
-        line.addView(LocalDownloadsUIState.selectModeBtn,
-                new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
+        line.addView(LocalDownloadsUIState.selectModeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
 
-        LocalDownloadsUIState.viewModeBtn = LocalDownloadsUIState.icon(
-                ctx,
-                LocalDownloadsUIState.createVectorIconDrawable(
-                        ctx,
-                        LocalDownloadsUIState.playlistGridMode ? LocalDownloadsUIState.ICON_GRID : LocalDownloadsUIState.ICON_LIST,
-                        LocalDownloadsUIState.primaryTextColor(), 0),
-                "Görünüm Değiştir"
-        );
+        LocalDownloadsUIState.viewModeBtn = LocalDownloadsUIState.icon(ctx, LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.playlistGridMode ? LocalDownloadsUIState.ICON_GRID : LocalDownloadsUIState.ICON_LIST, LocalDownloadsUIState.primaryTextColor(), 0), "Görünüm Değiştir");
         LocalDownloadsUIState.viewModeBtn.setOnClickListener(v -> {
             LocalDownloadsUIState.playlistGridMode = !LocalDownloadsUIState.playlistGridMode;
             LocalDownloadsUIState.savePreferences(ctx);
-            LocalDownloadsUIState.viewModeBtn.setImageDrawable(
-                    LocalDownloadsUIState.createVectorIconDrawable(
-                            ctx,
-                            LocalDownloadsUIState.playlistGridMode ? LocalDownloadsUIState.ICON_GRID : LocalDownloadsUIState.ICON_LIST,
-                            LocalDownloadsUIState.primaryTextColor(), 0));
+            LocalDownloadsUIState.viewModeBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.playlistGridMode ? LocalDownloadsUIState.ICON_GRID : LocalDownloadsUIState.ICON_LIST, LocalDownloadsUIState.primaryTextColor(), 0));
             Utils.showToastShort(LocalDownloadsUIState.playlistGridMode ? "Izgara (Grid) Görünümü" : "Liste Görünümü");
             fragment.showTracks();
         });
-        line.addView(LocalDownloadsUIState.viewModeBtn,
-                new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
+        line.addView(LocalDownloadsUIState.viewModeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
 
-        ImageButton search = LocalDownloadsUIState.icon(
-                ctx, BaseSearchViewController.getSearchIconDrawable(), str("morphe_music_downloads_search_hint"));
+        ImageButton search = LocalDownloadsUIState.icon(ctx, BaseSearchViewController.getSearchIconDrawable(), str("morphe_music_downloads_search_hint"));
         search.setOnClickListener(v -> LocalDownloadsUIState.toggleSearch(ctx));
-        line.addView(search,
-                new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
+        line.addView(search, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
 
-        LocalDownloadsUIState.headerFilterBtn = LocalDownloadsUIState.icon(
-                ctx,
-                LocalDownloadsUIState.createVectorIconDrawable(
-                        ctx, LocalDownloadsUIState.ICON_FILTER, LocalDownloadsUIState.activeAccentColor(), 0),
-                "Akıllı Otomatik Filtreler"
-        );
-        LocalDownloadsUIState.headerFilterBtn.setOnClickListener(v ->
-                showSmartFilterMenu(ctx, LocalDownloadsUIState.headerFilterBtn, fragment));
-        line.addView(LocalDownloadsUIState.headerFilterBtn,
-                new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
+        LocalDownloadsUIState.headerFilterBtn = LocalDownloadsUIState.icon(ctx, LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_FILTER, LocalDownloadsUIState.activeAccentColor(), 0), "Akıllı Otomatik Filtreler");
+        LocalDownloadsUIState.headerFilterBtn.setOnClickListener(v -> showSmartFilterMenu(ctx, LocalDownloadsUIState.headerFilterBtn, fragment));
+        line.addView(LocalDownloadsUIState.headerFilterBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
 
-        LocalDownloadsUIState.headerSettingsBtn = LocalDownloadsUIState.icon(
-                ctx,
-                LocalDownloadsUIState.createVectorIconDrawable(
-                        ctx, LocalDownloadsUIState.ICON_SETTINGS, LocalDownloadsUIState.activeAccentColor(), 0),
-                "Ayarlar"
-        );
+        LocalDownloadsUIState.headerSettingsBtn = LocalDownloadsUIState.icon(ctx, LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_SETTINGS, LocalDownloadsUIState.activeAccentColor(), 0), "Ayarlar");
         LocalDownloadsUIState.headerSettingsBtn.setOnClickListener(v -> fragment.showSettingsDialog());
-        line.addView(LocalDownloadsUIState.headerSettingsBtn,
-                new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
+        line.addView(LocalDownloadsUIState.headerSettingsBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 38), LocalDownloadsUIState.dp(ctx, 38)));
 
         header.addView(line, new LinearLayout.LayoutParams(-1, -2));
         return header;
     }
 
     public static void showSmartFilterMenu(Context ctx, View anchor, LocalDownloadsFragment fragment) {
-        String[] items = {
-                "⚡ En Çok Dinlenenler",
-                "🕘 Son İndirilenler",
-                "🌙 Gece Dinlenenler",
-                "◌ Hiç Dinlenmeyenler",
-                "🎵 Tüm Şarkılar",
-                "↕ Sırala…"
-        };
+        String[] items = {"⚡ En Çok Dinlenenler", "🕘 Son İndirilenler", "🌙 Gece Dinlenenler", "◌ Hiç Dinlenmeyenler", "🎵 Tüm Şarkılar", "↕ Sırala…"};
         LocalDownloadsUIState.showMenu(ctx, anchor, items, -1, pos -> {
             LocalDownloadsUIState.showingArtists = false;
             LocalDownloadsUIState.selectedPlaylist = null;
@@ -187,14 +140,8 @@ public final class LocalDownloadsHeader {
                 case 1 -> LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.RECENTLY_ADDED;
                 case 2 -> LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NIGHT_PLAYS;
                 case 3 -> LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NEVER_PLAYED;
-                case 4 -> {
-                    LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
-                    LocalDownloadsUIState.showingPlaylistsOverview = false;
-                }
-                case 5 -> {
-                    showSortMenu(ctx, anchor, fragment);
-                    return;
-                }
+                case 4 -> { LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE; LocalDownloadsUIState.showingPlaylistsOverview = false; }
+                case 5 -> { showSortMenu(ctx, anchor, fragment); return; }
             }
             LocalDownloadsUIState.animateNextSongList = true;
             fragment.showTracks();
@@ -203,12 +150,7 @@ public final class LocalDownloadsHeader {
     }
 
     public static void showSortMenu(Context ctx, View anchor, LocalDownloadsFragment fragment) {
-        String[] items = {
-                "📅 Son İndirilenler (En Yeni)",
-                str("morphe_music_downloads_sort_artist"),
-                str("morphe_music_downloads_sort_title"),
-                str("morphe_music_downloads_sort_size"),
-        };
+        String[] items = {"📅 Son İndirilenler (En Yeni)", str("morphe_music_downloads_sort_artist"), str("morphe_music_downloads_sort_title"), str("morphe_music_downloads_sort_size")};
         LocalDownloadsUIState.showMenu(ctx, anchor, items, LocalDownloadsUIState.SortOrder.saved().ordinal(), pos -> {
             Settings.DOWNLOADS_SORT.save(LocalDownloadsUIState.SortOrder.values()[pos].name());
             fragment.showTracks();
@@ -225,14 +167,12 @@ public final class LocalDownloadsHeader {
         BOTTOM_TAB_ICONS.clear();
         BOTTOM_TAB_LABELS.clear();
 
-        // GÖREV 1: "Geçmiş" sekmesi silindi, yerine "Sanatçılar" eklendi.
         String[] labels = {"Ana Sayfa", "Ara", "Kitaplık", "Sanatçılar", "Ayarlar"};
         String[] icons = {"🏠", "🔍", "📚", "🎤", "⚙️"};
 
         for (int i = 0; i < labels.length; i++) {
             final int tabIndex = i;
-            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists)
-                    || (i == 3 && LocalDownloadsUIState.showingArtists);
+            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists) || (i == 3 && LocalDownloadsUIState.showingArtists);
 
             LinearLayout tab = new LinearLayout(ctx);
             tab.setOrientation(LinearLayout.VERTICAL);
@@ -240,14 +180,10 @@ public final class LocalDownloadsHeader {
             tab.setPadding(0, LocalDownloadsUIState.dp(ctx, 6), 0, LocalDownloadsUIState.dp(ctx, 6));
             tab.setBackground(LocalDownloadsUIState.createCircleRipple());
 
-            TextView ic = LocalDownloadsUIState.text(
-                    ctx, icons[i], 16,
-                    active ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
+            TextView ic = LocalDownloadsUIState.text(ctx, icons[i], 16, active ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
             ic.setGravity(Gravity.CENTER);
 
-            TextView lb = LocalDownloadsUIState.text(
-                    ctx, labels[i], 11,
-                    active ? LocalDownloadsUIState.primaryTextColor() : LocalDownloadsUIState.secondary());
+            TextView lb = LocalDownloadsUIState.text(ctx, labels[i], 11, active ? LocalDownloadsUIState.primaryTextColor() : LocalDownloadsUIState.secondary());
             lb.setGravity(Gravity.CENTER);
             if (active) lb.setTypeface(Typeface.DEFAULT_BOLD);
 
@@ -258,17 +194,12 @@ public final class LocalDownloadsHeader {
             tab.addView(lb);
             tab.setOnClickListener(v -> {
                 if (tabIndex == 0) {
-                    // Ana Sayfa düğmesine basılınca direkt çevrimdışı oynatıcıdan çık
                     Activity activity = fragment.getActivity();
                     if (activity == null && ctx instanceof Activity a) activity = a;
-                    if (activity != null) {
-                        OfflinePlaybackService.stop(activity);
-                        OfflineIntegrationPatch.exitOfflineFragment(activity);
-                    }
+                    if (activity != null) { OfflinePlaybackService.stop(activity); OfflineIntegrationPatch.exitOfflineFragment(activity); }
                 } else if (tabIndex == 1) {
                     LocalDownloadsUIState.toggleSearch(ctx);
                 } else if (tabIndex == 2) {
-                    // Kitaplık Sekmesi
                     LocalDownloadsUIState.showingArtists = false;
                     LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
                     LocalDownloadsUIState.selectedPlaylist = null;
@@ -279,7 +210,6 @@ public final class LocalDownloadsHeader {
                     fragment.showTracks();
                     refreshBottomNavigationTheme(ctx);
                 } else if (tabIndex == 3) {
-                    // GÖREV 1: Sanatçılar Sekmesi
                     LocalDownloadsUIState.showingArtists = true;
                     LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
                     LocalDownloadsUIState.selectedPlaylist = null;
@@ -304,19 +234,12 @@ public final class LocalDownloadsHeader {
 
     public static void refreshBottomNavigationTheme(Context ctx) {
         if (LocalDownloadsUIState.bottomNavLayout != null) {
-            LocalDownloadsAnimator.animateBackgroundColorChange(
-                    LocalDownloadsUIState.bottomNavLayout,
-                    LocalDownloadsUIState.currentTheme.varBgBottom
-            );
+            LocalDownloadsAnimator.animateBackgroundColorChange(LocalDownloadsUIState.bottomNavLayout, LocalDownloadsUIState.currentTheme.varBgBottom);
         }
         for (int i = 0; i < BOTTOM_TAB_ICONS.size() && i < BOTTOM_TAB_LABELS.size(); i++) {
-            // GÖREV 1: Aktif sekme kontrolü Sanatçılar için güncellendi
-            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists)
-                    || (i == 3 && LocalDownloadsUIState.showingArtists);
-            BOTTOM_TAB_ICONS.get(i).setTextColor(
-                    active ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
-            BOTTOM_TAB_LABELS.get(i).setTextColor(
-                    active ? LocalDownloadsUIState.primaryTextColor() : LocalDownloadsUIState.secondary());
+            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists) || (i == 3 && LocalDownloadsUIState.showingArtists);
+            BOTTOM_TAB_ICONS.get(i).setTextColor(active ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
+            BOTTOM_TAB_LABELS.get(i).setTextColor(active ? LocalDownloadsUIState.primaryTextColor() : LocalDownloadsUIState.secondary());
             BOTTOM_TAB_LABELS.get(i).setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         }
     }
