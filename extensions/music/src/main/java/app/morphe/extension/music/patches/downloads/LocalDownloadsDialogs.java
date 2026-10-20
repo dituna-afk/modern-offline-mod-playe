@@ -218,7 +218,6 @@ public final class LocalDownloadsDialogs {
 
         addSettingsActionItem(activity, sheet, "📡 Sık Dinlenenleri Otomatik İndirme Ayarları (" + (autoWifi ? threshold + " Dinleme • " + (wifiOnly ? "Wi-Fi" : "Mobil+Wi-Fi") : "KAPALI") + ")", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showAutoDownloadConfigDialog(activity, fragment)));
 
-        // YENİ: Kütüphane Toplu İndirme Butonu
         addSettingsActionItem(activity, sheet, "📚 Hesabımdaki Tüm Kütüphaneyi Toplu İndir", () ->
                 LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () ->
                         LocalDownloadManager.fetchAndDownloadLibrary(musicRoot)));
@@ -959,6 +958,13 @@ public final class LocalDownloadsDialogs {
         });
         configRow.addView(engineBtn);
 
+        TextView aiKeyBtn = LocalDownloadsUIState.createPillButton(activity, "🤖 Yapay Zeka API Ayarı", false);
+        LinearLayout.LayoutParams aiLp = new LinearLayout.LayoutParams(-2, -2);
+        aiLp.setMargins(0, 0, LocalDownloadsUIState.dp(activity, 6), 0);
+        aiKeyBtn.setLayoutParams(aiLp);
+        aiKeyBtn.setOnClickListener(v -> showAiApiKeyDialog(activity));
+        configRow.addView(aiKeyBtn);
+
         TextView deeplKeyBtn = LocalDownloadsUIState.createPillButton(activity, "🔑 DeepL Anahtarı", false);
         deeplKeyBtn.setOnClickListener(v -> showDeeplApiKeyDialog(activity));
         configRow.addView(deeplKeyBtn);
@@ -978,7 +984,7 @@ public final class LocalDownloadsDialogs {
         LinearLayout rows = new LinearLayout(activity);
         rows.setOrientation(LinearLayout.VERTICAL);
         scroll.addView(rows);
-        panel.addView(scroll, new LinearLayout.LayoutParams(-1, LocalDownloadsUIState.dp(activity, 300)));
+        panel.addView(scroll, new LinearLayout.LayoutParams(-1, LocalDownloadsUIState.dp(activity, 280)));
 
         final String[] filterText = {""};
         Runnable[] renderRef = new Runnable[1];
@@ -1055,9 +1061,16 @@ public final class LocalDownloadsDialogs {
             @Override public void afterTextChanged(android.text.Editable s) {}
         });
 
+        TextView resetYtBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Tüm Sözleri Sıfırla & YT Music'ten Çek", false);
+        resetYtBtn.setGravity(Gravity.CENTER);
+        LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(-1, -2);
+        resetLp.setMargins(0, LocalDownloadsUIState.dp(activity, 8), 0, 0);
+        resetYtBtn.setLayoutParams(resetLp);
+        panel.addView(resetYtBtn);
+
         LinearLayout buttons = new LinearLayout(activity);
         buttons.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
-        buttons.setPadding(0, LocalDownloadsUIState.dp(activity, 10), 0, 0);
+        buttons.setPadding(0, LocalDownloadsUIState.dp(activity, 8), 0, 0);
 
         TextView purgeBtn = LocalDownloadsUIState.createPillButton(activity, "🧹 Bozuk Sözleri Sil", false);
         purgeBtn.setOnClickListener(v -> {
@@ -1085,8 +1098,51 @@ public final class LocalDownloadsDialogs {
 
         AlertDialog dialog = new AlertDialog.Builder(activity).setView(panel).create();
         close.setOnClickListener(v -> dialog.dismiss());
+
+        resetYtBtn.setOnClickListener(v -> {
+            new AlertDialog.Builder(activity)
+                    .setTitle("Tüm Sözleri Sıfırla & YT Music'ten Çek")
+                    .setMessage("Mevcut tüm .lrc dosyaları silinecek ve tüm şarkılar için SADECE YouTube Music resmi altyapısı kullanılarak sözler baştan indirilecek. Onaylıyor musunuz?")
+                    .setNegativeButton("İptal", null)
+                    .setPositiveButton("Sıfırla ve Başlat", (d, w) -> {
+                        resetYtBtn.setEnabled(false);
+                        fetch.setEnabled(false);
+                        resetYtBtn.setText("⏳ Sıfırlanıyor ve YT Music taranıyor...");
+
+                        final List<OfflineTrack> snapshot = new ArrayList<>(LocalDownloadsUIState.tracks);
+                        Utils.submitOnBackgroundThread(() -> {
+                            int okCount = LocalDownloadManager.resetAllLyricsAndFetchFromYtMusic(
+                                    musicRoot,
+                                    snapshot,
+                                    (current, total, successCount) -> Utils.runOnMainThread(() -> {
+                                        if (dialog.isShowing()) {
+                                            resetYtBtn.setText("⏳ YT Music (" + current + "/" + total + ") • Bulunan: " + successCount);
+                                        }
+                                    })
+                            );
+
+                            LocalDownloadsUIState.TRACK_CACHE.clear();
+                            LocalDownloadsUIState.diskReloadNeeded = true;
+
+                            Utils.runOnMainThread(() -> {
+                                if (!dialog.isShowing()) return;
+                                LocalDownloadsUIState.loadTracksIfNeeded(musicRoot);
+                                renderRef[0].run();
+                                resetYtBtn.setEnabled(true);
+                                fetch.setEnabled(true);
+                                resetYtBtn.setText("🔄 Tüm Sözleri Sıfırla & YT Music'ten Çek");
+                                fragment.showTracks();
+                                Utils.showToastShort("Tamamlandı! YT Music'ten " + okCount + " şarkı sözü indirildi.");
+                            });
+                            return null;
+                        });
+                    })
+                    .show();
+        });
+
         fetch.setOnClickListener(v -> {
             fetch.setEnabled(false);
+            resetYtBtn.setEnabled(false);
             fetch.setText("Başlatılıyor…");
             final LocalDownloadManager.LyricsSource chosenSource = LocalDownloadManager.getSavedLyricsSource();
             final LocalDownloadManager.TranslationEngine chosenEngine = LocalDownloadManager.getSavedTranslationEngine();
@@ -1094,11 +1150,9 @@ public final class LocalDownloadsDialogs {
 
             Utils.submitOnBackgroundThread(() -> {
                 LocalDownloadManager.purgeCorruptedLyrics(musicRoot);
-                SharedPreferences prefs = activity.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE);
-                SharedPreferences.Editor retryEditor = prefs.edit();
-                for (OfflineTrack track : new ArrayList<>(LocalDownloadsUIState.tracks)) retryEditor.remove("lyrics_lookup_failed_" + track.videoId());
-                retryEditor.apply();
+                LocalDownloadManager.clearFailedLyricsCache();
 
+                SharedPreferences prefs = activity.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE);
                 List<OfflineTrack> toProcess = new ArrayList<>(LocalDownloadsUIState.tracks);
                 int total = toProcess.size(), foundCount = 0;
 
@@ -1121,6 +1175,7 @@ public final class LocalDownloadsDialogs {
                     LocalDownloadsUIState.loadTracksIfNeeded(musicRoot);
                     renderRef[0].run();
                     fetch.setEnabled(true);
+                    resetYtBtn.setEnabled(true);
                     fetch.setText("⚡ Eksikleri Bul");
                     Utils.showToastShort("Tamamlandı! " + finalFound + " yeni söz eklendi.");
                 });
@@ -1335,6 +1390,71 @@ public final class LocalDownloadsDialogs {
         dialog.show();
     }
 
+    private static void showAiApiKeyDialog(Activity act) {
+        if (act == null) return;
+        LinearLayout box = new LinearLayout(act);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = LocalDownloadsUIState.dp(act, 20);
+        box.setPadding(pad, pad, pad, pad);
+        box.setBackground(LocalDownloadsUIState.menuBackground(act));
+
+        TextView title = LocalDownloadsUIState.text(act, "🤖 Yapay Zeka (DeepSeek / OpenAI) API Ayarı", 16, LocalDownloadsUIState.primaryTextColor());
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
+
+        TextView info = LocalDownloadsUIState.text(act,
+                "Şarkı sözlerini satır kaydırmadan ve şiirsel bağlamını koruyarak çevirmek için DeepSeek (deepseek-chat) veya OpenAI (gpt-4o-mini) API anahtarınızı girin. Anahtar boş bırakılırsa otomatik olarak Google GTX çevirisine geçilir.",
+                12, LocalDownloadsUIState.secondary());
+        info.setPadding(0, LocalDownloadsUIState.dp(act, 4), 0, LocalDownloadsUIState.dp(act, 10));
+        box.addView(info);
+
+        final String[] currentProvider = {LocalDownloadManager.getSavedAiProvider()};
+        String providerLabel = "OPENAI".equalsIgnoreCase(currentProvider[0]) ? "OpenAI (gpt-4o-mini)" : "DeepSeek (deepseek-chat / V3)";
+        TextView providerBtn = LocalDownloadsUIState.createPillButton(act, "🧠 Model Sağlayıcı: " + providerLabel, false);
+        providerBtn.setOnClickListener(v -> {
+            String[] items = {"DeepSeek (deepseek-chat / V3)", "OpenAI (gpt-4o-mini)"};
+            int sel = "OPENAI".equalsIgnoreCase(currentProvider[0]) ? 1 : 0;
+            LocalDownloadsUIState.showMenu(act, providerBtn, items, sel, pos -> {
+                currentProvider[0] = (pos == 1) ? "OPENAI" : "DEEPSEEK";
+                providerBtn.setText("🧠 Model Sağlayıcı: " + items[pos]);
+            });
+        });
+        LinearLayout.LayoutParams pLp = new LinearLayout.LayoutParams(-1, -2);
+        pLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(act, 10));
+        box.addView(providerBtn, pLp);
+
+        EditText keyInput = new EditText(act);
+        keyInput.setHint("sk-...");
+        keyInput.setText(LocalDownloadManager.getSavedAiApiKey());
+        keyInput.setTextColor(LocalDownloadsUIState.primaryTextColor());
+        keyInput.setHintTextColor(LocalDownloadsUIState.secondary());
+        keyInput.setSingleLine(true);
+        box.addView(keyInput, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout row = new LinearLayout(act);
+        row.setGravity(Gravity.END);
+        row.setPadding(0, LocalDownloadsUIState.dp(act, 12), 0, 0);
+        TextView cancelBtn = LocalDownloadsUIState.createPillButton(act, "İptal", false);
+        TextView saveBtn = LocalDownloadsUIState.createPillButton(act, "Kaydet", true);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(-2, -2);
+        sLp.setMargins(LocalDownloadsUIState.dp(act, 8), 0, 0, 0);
+        saveBtn.setLayoutParams(sLp);
+        row.addView(cancelBtn);
+        row.addView(saveBtn);
+        box.addView(row);
+
+        AlertDialog dialog = new AlertDialog.Builder(act).setView(box).create();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        cancelBtn.setOnClickListener(v -> dialog.dismiss());
+        saveBtn.setOnClickListener(v -> {
+            LocalDownloadManager.setSavedAiProvider(currentProvider[0]);
+            LocalDownloadManager.setSavedAiApiKey(keyInput.getText().toString());
+            dialog.dismiss();
+            Utils.showToastShort("Yapay zeka API ayarları kaydedildi");
+        });
+        dialog.show();
+    }
+
     private static void showDeeplApiKeyDialog(Activity act) {
         if (act == null) return;
         LinearLayout box = new LinearLayout(act);
@@ -1347,7 +1467,7 @@ public final class LocalDownloadsDialogs {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(title);
 
-        TextView info = LocalDownloadsUIState.text(act, "Yapay Zeka çeviri motorunu seçtiyseniz anahtara gerek yoktur. DeepL için kendi anahtarınızı girebilirsiniz.", 12, LocalDownloadsUIState.secondary());
+        TextView info = LocalDownloadsUIState.text(act, "DeepL motoru için kendi ücretsiz veya Pro API anahtarınızı girebilirsiniz.", 12, LocalDownloadsUIState.secondary());
         info.setPadding(0, LocalDownloadsUIState.dp(act, 4), 0, LocalDownloadsUIState.dp(act, 10));
         box.addView(info);
 
@@ -1437,7 +1557,6 @@ public final class LocalDownloadsDialogs {
         albumInput.setSingleLine(true);
         box.addView(albumInput, inputLp);
         
-        // YENİ: Yıl, Tür, Şirket, Credits Bilgileri (Sadece Görüntüleme)
         TextView metaInfo = LocalDownloadsUIState.text(activity, 
             "Yıl: " + track.releaseYear() + " | Tür: " + track.genre() + "\nŞirket: " + track.label() + "\nEmeği Geçenler: " + track.credits(), 
             12, LocalDownloadsUIState.secondary());
