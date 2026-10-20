@@ -4,7 +4,6 @@ import android.app.Activity;
 import android.app.FragmentManager;
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
 import android.net.Network;
@@ -94,14 +93,20 @@ public final class OfflineIntegrationPatch {
     }
 
     /**
-     * Özelleştirilebilir Online Dinleme Analizcisi:
-     * Ayarlarda belirlenen saniye kadar dinlenen şarkıların sayacını artırır,
-     * belirlenen eşiğe ulaştığında seçilen ağ ve hedef listeye otomatik indirir.
+     * Özelleştirilebilir Online Dinleme Analizcisi.
+     * İlk başlatmada önceki oturumdan kalan indirme kuyruğunu da geri yükler.
      */
     public static synchronized void startOnlinePlayAnalyzer(Context context) {
         if (analyzerStarted || context == null) return;
         analyzerStarted = true;
         final Context appCtx = context.getApplicationContext();
+
+        // Önceki oturumdan kalan indirme kuyruğunu geri yükle (kalıcı kuyruk)
+        try {
+            LocalDownloadManager.restorePersistedQueue();
+        } catch (Exception ex) {
+            Logger.printDebug(() -> "restorePersistedQueue failed", ex);
+        }
 
         ANALYZER_HANDLER.postDelayed(new Runnable() {
             @Override
@@ -249,10 +254,6 @@ public final class OfflineIntegrationPatch {
         backCallback = null;
     }
 
-    /**
-     * Özel Ana Sayfa düğmesine basıldığında çevrimdışı oynatıcıdan çıkar,
-     * YT Music'teki "İndirilenler" çip seçimini kaldırır ve gerçek Ana Sayfa'ya döner.
-     */
     public static void exitOfflineFragment(Activity activity) {
         if (activity == null) return;
         releaseBackGuard(activity);

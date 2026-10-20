@@ -13,15 +13,11 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.ColorFilter;
 import android.graphics.LinearGradient;
-import android.graphics.Matrix;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.PixelFormat;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.Shader;
-import android.graphics.SweepGradient;
 import android.graphics.drawable.Animatable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
@@ -37,12 +33,9 @@ import android.view.animation.OvershootInterpolator;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.WeakHashMap;
 
 public final class LocalDownloadsAnimator {
@@ -82,10 +75,8 @@ public final class LocalDownloadsAnimator {
     public static void animateListItemIn(Context ctx, View item, int index, int dpOffset) {
         if (item == null) return;
         AnimationProfile profile = getSavedAnimationProfile(ctx);
-
         item.setAlpha(0f);
         item.setTranslationY(dpOffset);
-
         long delay = Math.min(index, 10) * (profile == AnimationProfile.MINIMAL ? 10L : 18L);
         long duration = switch (profile) {
             case MINIMAL -> 140L;
@@ -93,17 +84,14 @@ public final class LocalDownloadsAnimator {
             case SMOOTH -> 280L;
             default -> 220L;
         };
-
         android.view.animation.Interpolator interpolator = switch (profile) {
             case SPRING -> new OvershootInterpolator(1.35f);
             case CYBER -> new AccelerateDecelerateInterpolator();
             case SMOOTH -> new DecelerateInterpolator(1.8f);
             default -> new DecelerateInterpolator();
         };
-
         item.setScaleX(profile == AnimationProfile.SPRING ? 0.96f : 1f);
         item.setScaleY(profile == AnimationProfile.SPRING ? 0.96f : 1f);
-
         item.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
                 .setStartDelay(delay).setDuration(duration).setInterpolator(interpolator).start();
     }
@@ -138,14 +126,12 @@ public final class LocalDownloadsAnimator {
     public static void applyArtworkBreathingEffect(View artworkView) {
         if (artworkView == null) return;
         stopArtworkBreathingEffect(artworkView);
-
         long duration = 3500L;
         try {
             Context ctx = artworkView.getContext();
             duration = LocalDownloadsUIState.scaleDuration(ctx, 3500L);
             if (LocalDownloadsUIState.isLowPowerMode(ctx)) duration *= 2L;
         } catch (Exception ignored) {}
-
         PropertyValuesHolder pvhX = PropertyValuesHolder.ofFloat("scaleX", 1f, 1.03f, 1f);
         PropertyValuesHolder pvhY = PropertyValuesHolder.ofFloat("scaleY", 1f, 1.03f, 1f);
         ObjectAnimator animator = ObjectAnimator.ofPropertyValuesHolder(artworkView, pvhX, pvhY);
@@ -167,7 +153,6 @@ public final class LocalDownloadsAnimator {
         if (sheet == null || overlay == null) return;
         overlay.setAlpha(0f);
         overlay.animate().alpha(1f).setDuration(BOTTOM_SHEET_ANIM_MS).start();
-
         float startY = screenHeight * 0.62f;
         sheet.setTranslationY(startY);
         ObjectAnimator slideUp = ObjectAnimator.ofFloat(sheet, "translationY", startY, 0f);
@@ -227,7 +212,6 @@ public final class LocalDownloadsAnimator {
         if (fullRoot == null) { if (onEnd != null) onEnd.run(); return; }
         Context ctx = fullRoot.getContext();
         long duration = LocalDownloadsUIState.scaleDuration(ctx, 260L);
-
         fullRoot.animate().cancel();
         if (artwork != null) {
             artwork.animate().cancel();
@@ -248,7 +232,6 @@ public final class LocalDownloadsAnimator {
         long outDuration = LocalDownloadsUIState.scaleDuration(ctx, 150L);
         long inDuration = LocalDownloadsUIState.scaleDuration(ctx, 230L);
         float shift = LocalDownloadsUIState.dp(ctx, 32) * (forward ? -1f : 1f);
-
         artwork.animate().cancel();
         artwork.animate().translationX(shift).alpha(0f).scaleX(0.94f).scaleY(0.94f)
                 .setDuration(outDuration).setInterpolator(new AccelerateInterpolator())
@@ -263,7 +246,6 @@ public final class LocalDownloadsAnimator {
         Context ctx = (artwork != null ? artwork : actionsRow) != null ? (artwork != null ? artwork.getContext() : actionsRow.getContext()) : null;
         if (ctx == null) return;
         long d = LocalDownloadsUIState.scaleDuration(ctx, 280L);
-
         if (artwork != null) {
             artwork.animate().cancel();
             float target = entering ? 1.08f : 1f;
@@ -282,7 +264,6 @@ public final class LocalDownloadsAnimator {
         long outD = LocalDownloadsUIState.scaleDuration(ctx, 140L);
         long inD = LocalDownloadsUIState.scaleDuration(ctx, 230L);
         float shift = LocalDownloadsUIState.dp(ctx, 26) * (enterFromRight ? -1f : 1f);
-
         content.animate().cancel();
         content.animate().alpha(0.35f).translationX(shift).setDuration(outD).setInterpolator(new AccelerateInterpolator())
                 .withEndAction(() -> {
@@ -294,22 +275,13 @@ public final class LocalDownloadsAnimator {
 
     public static int[] getThemeGradientPalette(LocalDownloadsUIState.ThemePalette theme) {
         if (theme == null) theme = LocalDownloadsUIState.ThemePalette.YT_MUSIC_PINK;
-        switch (theme) {
-            case GRIFFITH: return new int[]{Color.parseColor("#DCE6FF"), Color.parseColor("#4A7BC8"), Color.parseColor("#0F2A5C"), Color.parseColor("#4A7BC8"), Color.parseColor("#DCE6FF")};
-            case FAYE: return new int[]{Color.parseColor("#1B0A28"), Color.parseColor("#C45BDF"), Color.parseColor("#FF6B4A"), Color.parseColor("#FFD34E"), Color.parseColor("#C45BDF"), Color.parseColor("#1B0A28")};
-            case EVANGELION: return new int[]{Color.parseColor("#A855F7"), Color.parseColor("#B6FF00"), Color.parseColor("#A855F7"), Color.parseColor("#B6FF00"), Color.parseColor("#A855F7")};
-            default: return new int[]{theme.varBgMid, theme.varAccentPrimary, theme.varBgMid, theme.varAccentSecondary, theme.varBgMid};
-        }
+        // Anime temaları kaldırıldı; yalnızca standart tema paleti kullanılır.
+        return new int[]{theme.varBgMid, theme.varAccentPrimary, theme.varBgMid, theme.varAccentSecondary, theme.varBgMid};
     }
 
     public static int[] getHaloColors(LocalDownloadsUIState.ThemePalette theme) {
         if (theme == null) theme = LocalDownloadsUIState.ThemePalette.YT_MUSIC_PINK;
-        switch (theme) {
-            case GRIFFITH: return new int[]{Color.parseColor("#A5C0E8"), Color.parseColor("#3A6BB5")};
-            case FAYE: return new int[]{Color.parseColor("#C45BDF"), Color.parseColor("#FFD34E")};
-            case EVANGELION: return new int[]{Color.parseColor("#A855F7"), Color.parseColor("#B6FF00")};
-            default: return new int[]{theme.varAccentPrimary, theme.varAccentSecondary};
-        }
+        return new int[]{theme.varAccentPrimary, theme.varAccentSecondary};
     }
 
     public static HaloGlowDrawable createHaloDrawable(Context ctx) {
@@ -324,20 +296,14 @@ public final class LocalDownloadsAnimator {
         return new FlowingGradientDrawable(ctx, LocalDownloadsUIState.resolveActiveGradientPalette(ctx, track));
     }
 
-    public static FayeFlowingPaintDrawable createFayeBackground(Context ctx, int color1, int color2, int color3) {
-        return new FayeFlowingPaintDrawable(ctx, color1, color2, color3);
-    }
-
     public static void animateProgress(@Nullable ProgressBar progressBar, int targetProgress) {
         if (progressBar == null) return;
         int target = Math.max(0, Math.min(progressBar.getMax(), targetProgress));
         ValueAnimator previous;
         synchronized (PROGRESS_ANIMATORS) { previous = PROGRESS_ANIMATORS.remove(progressBar); }
         if (previous != null) { try { previous.cancel(); } catch (Exception ignored) {} }
-
         int start = progressBar.getProgress();
         if (start == target || !progressBar.isAttachedToWindow()) { progressBar.setProgress(target); return; }
-
         ValueAnimator animator = ValueAnimator.ofInt(start, target);
         animator.setDuration(220L);
         animator.setInterpolator(new DecelerateInterpolator());
@@ -365,14 +331,11 @@ public final class LocalDownloadsAnimator {
         try { root.animate().cancel(); root.clearAnimation(); } catch (Exception ignored) {}
         stopArtworkBreathingEffect(root);
         if (root instanceof ProgressBar progressBar) cancelProgressAnimation(progressBar);
-
         Drawable bg = root.getBackground();
         if (bg instanceof Animatable anim) { try { if (anim.isRunning()) anim.stop(); } catch (Exception ignored) {} }
-
         Drawable foreground = null;
         if (android.os.Build.VERSION.SDK_INT >= 23) { try { foreground = root.getForeground(); } catch (Exception ignored) {} }
         if (foreground instanceof Animatable anim) { try { if (anim.isRunning()) anim.stop(); } catch (Exception ignored) {} }
-
         if (root instanceof ViewGroup vg) for (int i = 0; i < vg.getChildCount(); i++) stopAllPlayerAnimations(vg.getChildAt(i));
     }
 
@@ -380,16 +343,13 @@ public final class LocalDownloadsAnimator {
         private final Context ctx;
         private final int colorPrimary;
         private final int colorSecondary;
-        private final LocalDownloadsUIState.ThemeAnimation style;
         private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         private RadialGradient primaryShader;
         private RadialGradient secondaryShader;
-        private SweepGradient cdSparkle;
         private int cachedW = 0, cachedH = 0;
 
         private float phase = 0f;
-        private float sparkleAngle = 0f;
         private boolean running = false;
         private boolean playing = true;
         private int viewAlpha = 255;
@@ -402,7 +362,7 @@ public final class LocalDownloadsAnimator {
             this.ctx = ctx.getApplicationContext();
             this.colorPrimary = colorPrimary;
             this.colorSecondary = colorSecondary;
-            this.style = style == null ? LocalDownloadsUIState.ThemeAnimation.STANDARD_PULSE : style;
+            // style gelecekteki tema efektleri için ayrılmıştır (anime temaları kaldırıldı)
         }
 
         public void setPlaying(boolean playing) { this.playing = playing; }
@@ -415,16 +375,10 @@ public final class LocalDownloadsAnimator {
             if (w <= 0 || h <= 0) return;
             if (primaryShader != null && w == cachedW && h == cachedH) return;
             cachedW = w; cachedH = h;
-
             float cx = b.exactCenterX(), cy = b.exactCenterY();
             float radius = Math.min(w, h) * 0.5f;
-
             primaryShader = buildRadial(cx, cy, radius, colorPrimary);
             secondaryShader = buildRadial(cx, cy, radius, colorSecondary);
-
-            if (style == LocalDownloadsUIState.ThemeAnimation.FAYE_FLOW) {
-                cdSparkle = new SweepGradient(0f, 0f, new int[]{0x00FFFFFF, 0x70FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0x00FFFFFF, 0x40FFFFFF, 0x00FFFFFF, 0x00FFFFFF}, null);
-            } else cdSparkle = null;
         }
 
         private RadialGradient buildRadial(float cx, float cy, float radius, int color) {
@@ -443,74 +397,17 @@ public final class LocalDownloadsAnimator {
             if (b.isEmpty()) return;
             if (primaryShader == null) rebuildShaders();
             if (primaryShader == null) return;
-
             float pulse = (float) (Math.sin(phase * Math.PI * 2.0) * 0.5 + 0.5);
             float intensity = LocalDownloadsUIState.getAnimationIntensity(ctx);
             float playFactor = playing ? 1f : 0.4f;
-
             float cx = b.exactCenterX(), cy = b.exactCenterY();
             float r = Math.min(b.width(), b.height()) * 0.5f;
-
             int baseAlpha = (int) ((70f + pulse * 90f) * intensity * playFactor);
             int secAlpha = (int) ((60f + (1f - pulse) * 80f) * intensity * playFactor);
-
             int a1 = clamp(baseAlpha * viewAlpha / 255);
             int a2 = clamp(secAlpha * viewAlpha / 255);
-
             paint.setShader(primaryShader); paint.setAlpha(a1); canvas.drawCircle(cx, cy, r, paint);
             paint.setShader(secondaryShader); paint.setAlpha(a2); canvas.drawCircle(cx, cy, r * (1.05f + pulse * 0.1f), paint);
-
-            switch (style) {
-                case FAYE_FLOW -> drawFayeEffects(canvas, cx, cy, r, pulse, intensity, playFactor);
-                case GRIFFITH_FLOW -> drawGriffithEffects(canvas, cx, cy, r, pulse, intensity, playFactor);
-                case EVANGELION_PULSE -> drawEvangelionEffects(canvas, cx, cy, r, pulse, intensity, playFactor);
-                default -> { }
-            }
-        }
-
-        private void drawFayeEffects(Canvas canvas, float cx, float cy, float r, float pulse, float intensity, float playFactor) {
-            if (cdSparkle != null) {
-                Matrix m = new Matrix(); m.postTranslate(cx, cy); m.postRotate(sparkleAngle, cx, cy);
-                cdSparkle.setLocalMatrix(m);
-                int sparkleAlpha = clamp((int) ((50f + pulse * 50f) * intensity * playFactor) * viewAlpha / 255);
-                paint.setShader(cdSparkle); paint.setAlpha(sparkleAlpha); canvas.drawCircle(cx, cy, r * 1.02f, paint); paint.setShader(null);
-            }
-            float t = (float) (Math.sin(phase * Math.PI * 1.2) * 0.5 + 0.5);
-            int ringColor = blend(colorPrimary, colorSecondary, t);
-            int ringAlpha = clamp((int) ((60f + pulse * 60f) * intensity * playFactor) * viewAlpha / 255);
-            paint.setColor((ringColor & 0x00FFFFFF) | (ringAlpha << 24));
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(LocalDownloadsUIState.dp(ctx, 2f));
-            canvas.drawCircle(cx, cy, r * 0.94f, paint);
-            paint.setStyle(Paint.Style.FILL);
-        }
-
-        private void drawGriffithEffects(Canvas canvas, float cx, float cy, float r, float pulse, float intensity, float playFactor) {
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(LocalDownloadsUIState.dp(ctx, 1.5f));
-            int alpha = clamp((int) ((30f + pulse * 40f) * intensity * playFactor) * viewAlpha / 255);
-            paint.setColor((colorPrimary & 0x00FFFFFF) | (alpha << 24));
-            for (int i = 0; i < 2; i++) {
-                float wr = r * (1.10f + i * 0.08f);
-                RectF oval = new RectF(cx - wr, cy - wr, cx + wr, cy + wr);
-                canvas.drawArc(oval, 155, 32, false, paint); canvas.drawArc(oval, -7, 32, false, paint);
-            }
-            paint.setStyle(Paint.Style.FILL);
-        }
-
-        private void drawEvangelionEffects(Canvas canvas, float cx, float cy, float r, float pulse, float intensity, float playFactor) {
-            Rect b = getBounds();
-            int innerAlpha = clamp((int) ((60f + pulse * 60f) * intensity * playFactor) * viewAlpha / 255);
-            paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(LocalDownloadsUIState.dp(ctx, 2.5f));
-            paint.setColor((colorSecondary & 0x00FFFFFF) | (innerAlpha << 24));
-            canvas.drawCircle(cx, cy, r * 0.86f, paint);
-
-            int stripeAlpha = clamp((int) (25f * intensity * playFactor) * viewAlpha / 255);
-            paint.setStrokeWidth(LocalDownloadsUIState.dp(ctx, 2f)); paint.setColor((0xFFD700 & 0x00FFFFFF) | (stripeAlpha << 24));
-            float stripeW = LocalDownloadsUIState.dp(ctx, 14), spacing = LocalDownloadsUIState.dp(ctx, 10);
-            float y0 = b.top + LocalDownloadsUIState.dp(ctx, 4), y1 = y0 + LocalDownloadsUIState.dp(ctx, 10);
-            for (float x = b.left - stripeW; x < b.right; x += spacing) canvas.drawLine(x, y1, x + stripeW, y0, paint);
-            y0 = b.bottom - LocalDownloadsUIState.dp(ctx, 4); y1 = y0 - LocalDownloadsUIState.dp(ctx, 10);
-            for (float x = b.left - stripeW; x < b.right; x += spacing) canvas.drawLine(x, y0, x + stripeW, y1, paint);
-            paint.setStyle(Paint.Style.FILL);
         }
 
         @Override
@@ -528,7 +425,6 @@ public final class LocalDownloadsAnimator {
                     lastInvalidateMs = now;
                 }
                 phase = (float) a.getAnimatedValue();
-                sparkleAngle = phase * 40f;
                 invalidateSelf();
             });
             animator.start();
@@ -613,174 +509,5 @@ public final class LocalDownloadsAnimator {
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
-    public static final class FayeFlowingPaintDrawable extends Drawable implements Animatable {
-        private final Context ctx;
-        private final int color1, color2, color3;
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Paint shapePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        
-        private final Path path1 = new Path();
-        private final Path path2 = new Path();
-        private final Path path3 = new Path();
-
-        private final List<FloatingShape> shapes = new ArrayList<>();
-        private final Random random = new Random();
-
-        private float phase = 0f;
-        private boolean running = false;
-        private int viewAlpha = 255;
-        private long lastInvalidateMs = 0L;
-        private long lastLowPowerCheck = 0L;
-        private boolean lowPowerCache = false;
-        private ValueAnimator animator;
-        private int cachedW = 0, cachedH = 0;
-
-        FayeFlowingPaintDrawable(Context ctx, int c1, int c2, int c3) {
-            this.ctx = ctx.getApplicationContext();
-            this.color1 = c1; this.color2 = c2; this.color3 = c3;
-            shapePaint.setStyle(Paint.Style.FILL_AND_STROKE);
-            shapePaint.setStrokeWidth(LocalDownloadsUIState.dp(ctx, 1.5f));
-        }
-
-        @Override protected void onBoundsChange(@NonNull Rect bounds) {
-            super.onBoundsChange(bounds);
-            int w = bounds.width(), h = bounds.height();
-            if (w <= 0 || h <= 0) return;
-            if (cachedW != w || cachedH != h) { cachedW = w; cachedH = h; initShapes(w, h); }
-        }
-
-        private void initShapes(int w, int h) {
-            shapes.clear();
-            // GÖREV 1: Performans için parçacık sayısı 18'den 9'a düşürüldü
-            int numShapes = 9; 
-            for (int i = 0; i < numShapes; i++) {
-                shapes.add(new FloatingShape(
-                        random.nextFloat() * w, random.nextFloat() * h,
-                        LocalDownloadsUIState.dp(ctx, 10 + random.nextInt(30)),
-                        (random.nextFloat() - 0.5f) * 0.5f, -0.2f - (random.nextFloat() * 0.6f),
-                        random.nextInt(3), (random.nextFloat() - 0.5f) * 90f, random.nextFloat() * 0.5f
-                ));
-            }
-        }
-
-        private boolean isLowPowerCached() {
-            long now = System.currentTimeMillis();
-            if (now - lastLowPowerCheck > 1000L) { lowPowerCache = LocalDownloadsUIState.isLowPowerMode(ctx); lastLowPowerCheck = now; }
-            return lowPowerCache;
-        }
-
-        @Override
-        public void draw(@NonNull Canvas canvas) {
-            Rect b = getBounds();
-            int w = b.width(), h = b.height();
-            if (w <= 0 || h <= 0) return;
-            canvas.drawColor(color1);
-            drawFlowingColumns(canvas, w, h);
-            drawFloatingShapes(canvas, w, h);
-        }
-
-        private void drawFlowingColumns(Canvas canvas, int w, int h) {
-            int columns = 3;
-            float colWidth = w / (float) columns;
-
-            for (int i = 0; i < columns; i++) {
-                Path p = i == 0 ? path1 : (i == 1 ? path2 : path3);
-                p.reset();
-                int color = i == 0 ? color1 : (i == 1 ? color2 : color3);
-                paint.setColor(color); paint.setAlpha(viewAlpha);
-
-                float xOffset = i * colWidth;
-                float waveAmplitude = colWidth * 0.4f;
-                float waveSpeed = 1.5f + i * 0.5f;
-                
-                p.moveTo(xOffset, 0);
-                for (float y = 0; y <= h; y += 20) {
-                    float phaseOffset = phase * (float) (Math.PI * 2) * waveSpeed + (i * 2.0f);
-                    float x = xOffset + (float) Math.sin(y / (h * 0.2f) + phaseOffset) * waveAmplitude;
-                    p.lineTo(x, y);
-                }
-                p.lineTo(xOffset + colWidth, h);
-                for (float y = h; y >= 0; y -= 20) {
-                    float phaseOffset = phase * (float) (Math.PI * 2) * waveSpeed + (i * 2.0f);
-                    float x = xOffset + colWidth + (float) Math.sin(y / (h * 0.2f) + phaseOffset) * waveAmplitude;
-                    p.lineTo(x, y);
-                }
-                p.close();
-
-                paint.setStyle(Paint.Style.FILL);
-                paint.setAlpha((int) (viewAlpha * 0.6f));
-                canvas.drawPath(p, paint);
-            }
-        }
-
-        private void drawFloatingShapes(Canvas canvas, int w, int h) {
-            if (shapes.isEmpty()) initShapes(w, h);
-            for (FloatingShape shape : shapes) {
-                canvas.save();
-                canvas.translate(shape.x, shape.y); canvas.rotate(shape.rotation);
-                int c = shape.type == 0 ? color1 : (shape.type == 1 ? color2 : color3);
-                shapePaint.setColor(c); shapePaint.setAlpha((int) (viewAlpha * 0.25f));
-                if (shape.type == 0) canvas.drawCircle(0, 0, shape.size, shapePaint);
-                else if (shape.type == 1) {
-                    Path tri = new Path();
-                    tri.moveTo(0, -shape.size); tri.lineTo(shape.size * 0.866f, shape.size * 0.5f); tri.lineTo(-shape.size * 0.866f, shape.size * 0.5f); tri.close();
-                    canvas.drawPath(tri, shapePaint);
-                } else canvas.drawRect(-shape.size/2, -shape.size/2, shape.size/2, shape.size/2, shapePaint);
-                canvas.restore();
-            }
-        }
-
-        @Override
-        public void start() {
-            if (running) return;
-            running = true;
-            animator = ValueAnimator.ofFloat(0f, 1f);
-            animator.setRepeatCount(ValueAnimator.INFINITE); animator.setRepeatMode(ValueAnimator.RESTART);
-            animator.setDuration(Math.max(3000L, LocalDownloadsUIState.scaleDuration(ctx, 15000L)));
-            animator.setInterpolator(new LinearInterpolator());
-            
-            animator.addUpdateListener(a -> {
-                if (isLowPowerCached()) {
-                    long now = System.currentTimeMillis();
-                    if (now - lastInvalidateMs < 66L) return;
-                    lastInvalidateMs = now;
-                }
-                phase = (float) a.getAnimatedValue();
-                for (FloatingShape shape : shapes) {
-                    shape.x += shape.vx; shape.y += shape.vy; shape.rotation += shape.rotationSpeed;
-                    if (shape.y < -shape.size * 2) { shape.y = cachedH + shape.size * 2; shape.x = random.nextFloat() * cachedW; }
-                    if (shape.x < -shape.size * 2) shape.x = cachedW + shape.size;
-                    if (shape.x > cachedW + shape.size * 2) shape.x = -shape.size;
-                }
-                invalidateSelf();
-            });
-            animator.start();
-        }
-
-        @Override public void stop() { running = false; if (animator != null) { try { animator.cancel(); } catch (Exception ignored) {} animator = null; } }
-        @Override public boolean isRunning() { return running; }
-        @Override public void setAlpha(int alpha) { viewAlpha = alpha; invalidateSelf(); }
-        @Override public void setColorFilter(@Nullable ColorFilter cf) { paint.setColorFilter(cf); shapePaint.setColorFilter(cf); }
-        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
-    }
-
-    private static final class FloatingShape {
-        float x, y, size, vx, vy;
-        int type;
-        float rotation, rotationSpeed;
-        FloatingShape(float x, float y, float size, float vx, float vy, int type, float rotation, float rotationSpeed) {
-            this.x = x; this.y = y; this.size = size; this.vx = vx; this.vy = vy;
-            this.type = type; this.rotation = rotation; this.rotationSpeed = rotationSpeed;
-        }
-    }
-
     private static int clamp(int v) { return Math.max(0, Math.min(255, v)); }
-
-    private static int blend(int c1, int c2, float t) {
-        float inv = 1f - t;
-        int r = (int) (Color.red(c1) * inv + Color.red(c2) * t);
-        int g = (int) (Color.green(c1) * inv + Color.green(c2) * t);
-        int b = (int) (Color.blue(c1) * inv + Color.blue(c2) * t);
-        return Color.rgb(r, g, b);
-    }
 }

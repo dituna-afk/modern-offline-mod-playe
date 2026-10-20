@@ -21,6 +21,7 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.media.AudioManager;
 import android.text.TextUtils;
 import android.view.GestureDetector;
 import android.view.Gravity;
@@ -28,9 +29,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
-import android.view.animation.AccelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
-import android.view.animation.OvershootInterpolator;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageButton;
@@ -46,7 +45,9 @@ import androidx.annotation.Nullable;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import app.morphe.extension.shared.Logger;
 import app.morphe.extension.shared.Utils;
@@ -57,7 +58,6 @@ public final class LocalDownloadsPlayer {
         final long timeMs;
         final String original;
         String translated;
-
         LyricPair(long timeMs, String original, String translated) {
             this.timeMs = timeMs;
             this.original = original;
@@ -90,12 +90,8 @@ public final class LocalDownloadsPlayer {
     private static boolean dismissingWithAnimation = false;
     private static boolean focusModeActiveLocal = false;
 
-    private static boolean isFayeModeActive = false;
-    @Nullable private static LocalDownloadsAnimator.FayeFlowingPaintDrawable fayeBgDrawable;
-
     private LocalDownloadsPlayer() {}
 
-    // GÖREV 4: Uygulama yeniden başladığında eski referansların temizlenmesi için
     public static void resetPlayerState() {
         if (fullPlayerDialog != null) {
             try { fullPlayerDialog.dismiss(); } catch (Exception ignored) {}
@@ -106,11 +102,9 @@ public final class LocalDownloadsPlayer {
         fullPlayerHaloDrawable = null;
         fullPlayerGradientDrawable = null;
         fullPlayerHaloView = null;
-        fayeBgDrawable = null;
         openingFullPlayer = false;
         dismissingWithAnimation = false;
         breathingActive = false;
-        isFayeModeActive = false;
     }
 
     public static boolean isFullPlayerShowing() {
@@ -125,7 +119,6 @@ public final class LocalDownloadsPlayer {
 
     private static void dismissWithAnimation() {
         if (dismissingWithAnimation) return;
-
         final Dialog dialogToDismiss = fullPlayerDialog;
         final LinearLayout rootToDismiss = fullPlayerRoot;
         final ImageView artworkToDismiss = fullArtwork;
@@ -133,17 +126,11 @@ public final class LocalDownloadsPlayer {
             dismissingWithAnimation = false;
             return;
         }
-
         dismissingWithAnimation = true;
         LocalDownloadsAnimator.animatePlayerMinimize(rootToDismiss, artworkToDismiss, () -> {
-            try {
-                if (dialogToDismiss.isShowing()) dialogToDismiss.dismiss();
-            } catch (Exception ignored) {
-            } finally {
-                if (fullPlayerDialog != dialogToDismiss) {
-                    dismissingWithAnimation = false;
-                }
-            }
+            try { if (dialogToDismiss.isShowing()) dialogToDismiss.dismiss(); }
+            catch (Exception ignored) {}
+            finally { if (fullPlayerDialog != dialogToDismiss) dismissingWithAnimation = false; }
         });
     }
 
@@ -219,13 +206,7 @@ public final class LocalDownloadsPlayer {
     public static void showFullScreenPlayer(Activity activity, LocalDownloadsFragment fragment) {
         if (activity == null || fragment == null || activity.isFinishing()) return;
         if (android.os.Build.VERSION.SDK_INT >= 17 && activity.isDestroyed()) return;
-
-        // GÖREV 2: Oynatıcı Seçimine göre yönlendir
-        if (LocalDownloadsUIState.isPlayer2FayeSelected(activity)) {
-            showFayeFullScreenPlayer(activity, fragment);
-        } else {
-            showNormalFullScreenPlayer(activity, fragment);
-        }
+        showNormalFullScreenPlayer(activity, fragment);
     }
 
     private static void showNormalFullScreenPlayer(Activity activity, LocalDownloadsFragment fragment) {
@@ -299,7 +280,6 @@ public final class LocalDownloadsPlayer {
                     if (e1 == null || e2 == null) return false;
                     float dx = e2.getX() - e1.getX();
                     float dy = e2.getY() - e1.getY();
-
                     if (dy < -LocalDownloadsUIState.dp(activity, 70) && Math.abs(dy) > Math.abs(dx) * 1.2f) {
                         showUpNextQueueDialog(activity);
                         return true;
@@ -372,6 +352,10 @@ public final class LocalDownloadsPlayer {
             TextView sleepPill = createYtActionPill(activity, "🌙 Uyku Zamanlayıcısı");
             sleepPill.setOnClickListener(v -> showSleepTimerDialog(activity, sleepPill));
             actionsRow.addView(sleepPill);
+
+            TextView eqPill = createYtActionPill(activity, "🎚️ Ekolayzer & Hız");
+            eqPill.setOnClickListener(v -> LocalDownloadsDialogs.showEqualizerDialog(activity));
+            actionsRow.addView(eqPill);
 
             TextView preampPill = createYtActionPill(activity, "🔊 Ses Yükseltici");
             preampPill.setOnClickListener(v -> showPreampBoosterDialog(activity));
@@ -454,7 +438,31 @@ public final class LocalDownloadsPlayer {
             controlsRow.addView(fullRepeatBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 48), LocalDownloadsUIState.dp(activity, 48)));
             fullPlayerRoot.addView(controlsRow, new LinearLayout.LayoutParams(-1, -2));
 
-            fullPlayerDialog.setContentView(fullPlayerRoot);
+            // ==== Ses / Parlaklık kenar jestleri için FrameLayout sarmalayıcı ====
+            FrameLayout gestureWrapper = new FrameLayout(activity);
+            gestureWrapper.addView(fullPlayerRoot, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+            final AudioManager am = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
+            final int maxVol = am != null ? am.getStreamMaxVolume(AudioManager.STREAM_MUSIC) : 15;
+
+            View leftEdge = new View(activity);
+            FrameLayout.LayoutParams leftLp = new FrameLayout.LayoutParams(
+                    LocalDownloadsUIState.dp(activity, 55),
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    Gravity.START);
+            gestureWrapper.addView(leftEdge, leftLp);
+            installEdgeGesture(leftEdge, activity, am, maxVol, true);
+
+            View rightEdge = new View(activity);
+            FrameLayout.LayoutParams rightLp = new FrameLayout.LayoutParams(
+                    LocalDownloadsUIState.dp(activity, 55),
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    Gravity.END);
+            gestureWrapper.addView(rightEdge, rightLp);
+            installEdgeGesture(rightEdge, activity, am, maxVol, false);
+
+            fullPlayerDialog.setContentView(gestureWrapper);
             setupDialogDismissListener(activity);
 
             Window window = fullPlayerDialog.getWindow();
@@ -472,7 +480,6 @@ public final class LocalDownloadsPlayer {
             applyEffectsVisibility(activity);
             updatePlayIcon(activity, showingPause);
 
-            isFayeModeActive = false;
             fullPlayerDialog.show();
             openingFullPlayer = false;
 
@@ -487,197 +494,56 @@ public final class LocalDownloadsPlayer {
         }
     }
 
-    private static void showFayeFullScreenPlayer(Activity activity, LocalDownloadsFragment fragment) {
-        if (openingFullPlayer || (fullPlayerDialog != null && fullPlayerDialog.isShowing())) return;
-        openingFullPlayer = true;
-        try {
-            isFayeModeActive = true;
-            fullPlayerDialog = new Dialog(activity, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+    /**
+     * Kenar şeritlerine ses/parlaklık jesti kurar.
+     * @param isBrightness true ise sol kenar (parlaklık), false ise sağ kenar (ses).
+     */
+    private static void installEdgeGesture(View edge, Activity activity,
+                                           @Nullable AudioManager am, int maxVol, boolean isBrightness) {
+        final float[] startY = {0f};
+        final int[] startVolume = {0};
+        final float[] startBrightness = {0.5f};
 
-            FrameLayout fayeRoot = new FrameLayout(activity);
-
-            int c1 = LocalDownloadsUIState.currentTheme.varAccentPrimary;
-            int c2 = LocalDownloadsUIState.currentTheme.varAccentSecondary;
-            int c3 = LocalDownloadsUIState.currentTheme.varBgMid;
-
-            fayeBgDrawable = LocalDownloadsAnimator.createFayeBackground(activity, c1, c2, c3);
-            fayeRoot.setBackground(fayeBgDrawable);
-            fayeBgDrawable.start();
-
-            fullPlayerRoot = new LinearLayout(activity);
-            fullPlayerRoot.setOrientation(LinearLayout.VERTICAL);
-            fullPlayerRoot.setGravity(Gravity.CENTER_HORIZONTAL);
-            fullPlayerRoot.setPadding(LocalDownloadsUIState.dp(activity, 24), LocalDownloadsUIState.dp(activity, 40), LocalDownloadsUIState.dp(activity, 24), LocalDownloadsUIState.dp(activity, 30));
-
-            ImageButton closeBtn = new ImageButton(activity);
-            closeBtn.setBackground(LocalDownloadsUIState.createCircleRipple());
-            closeBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(activity, LocalDownloadsUIState.ICON_CLOSE, Color.WHITE, 0));
-            closeBtn.setOnClickListener(v -> dismissWithAnimation());
-            FrameLayout.LayoutParams closeLp = new FrameLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 48), LocalDownloadsUIState.dp(activity, 48));
-            closeLp.gravity = Gravity.TOP | Gravity.START;
-            closeLp.setMargins(LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 16), 0, 0);
-            fayeRoot.addView(closeBtn, closeLp);
-
-            FrameLayout artWrap = new FrameLayout(activity);
-            int artSize = Math.min(LocalDownloadsUIState.dp(activity, 360), activity.getResources().getDisplayMetrics().widthPixels - LocalDownloadsUIState.dp(activity, 60));
-
-            fullPlayerHaloView = new View(activity);
-            fullPlayerHaloDrawable = LocalDownloadsAnimator.createHaloDrawable(activity);
-            fullPlayerHaloView.setBackground(fullPlayerHaloDrawable);
-            int haloSize = artSize + LocalDownloadsUIState.dp(activity, 150);
-            artWrap.addView(fullPlayerHaloView, new FrameLayout.LayoutParams(haloSize, haloSize, Gravity.CENTER));
-
-            fullArtwork = LocalDownloadsUIState.artworkView(activity, null, LocalDownloadsUIState.FULL_ARTWORK_CORNER_DP);
-            fullArtwork.setElevation(LocalDownloadsUIState.dp(activity, 20f));
-            GradientDrawable border = new GradientDrawable();
-            border.setCornerRadius(LocalDownloadsUIState.dp(activity, LocalDownloadsUIState.FULL_ARTWORK_CORNER_DP));
-            border.setStroke(LocalDownloadsUIState.dp(activity, 2), c2);
-            fullArtwork.setBackground(border);
-
-            artWrap.addView(fullArtwork, new FrameLayout.LayoutParams(artSize, artSize, Gravity.CENTER));
-
-            GestureDetector fayeGestureDetector = new GestureDetector(activity, new GestureDetector.SimpleOnGestureListener() {
-                @Override public boolean onDown(MotionEvent e) { return true; }
-                @Override public boolean onFling(MotionEvent e1, MotionEvent e2, float vX, float vY) {
-                    if (e1 == null || e2 == null) return false;
-                    float dx = e2.getX() - e1.getX();
-                    if (Math.abs(dx) > LocalDownloadsUIState.dp(activity, 80) && Math.abs(dx) > Math.abs(vY) * 1.2f) {
-                        boolean next = dx < 0;
-                        LocalDownloadsAnimator.animateArtworkSwipe(artWrap, next, LocalDownloadsUIState.dp(activity, 20));
-                        if (next) OfflinePlaybackService.skipNext(activity);
-                        else OfflinePlaybackService.skipPrevious(activity);
-                        return true;
+        edge.setOnTouchListener((v, ev) -> {
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN: {
+                    startY[0] = ev.getRawY();
+                    if (isBrightness) {
+                        Window win = activity.getWindow();
+                        if (win != null) {
+                            WindowManager.LayoutParams lp = win.getAttributes();
+                            startBrightness[0] = lp.screenBrightness < 0 ? 0.5f : lp.screenBrightness;
+                        }
+                    } else if (am != null) {
+                        startVolume[0] = am.getStreamVolume(AudioManager.STREAM_MUSIC);
                     }
-                    return false;
+                    return true;
                 }
-            });
-            artWrap.setOnTouchListener((v, event) -> fayeGestureDetector.onTouchEvent(event));
-
-            fullPlayerRoot.addView(artWrap, new LinearLayout.LayoutParams(-1, 0, 1f));
-
-            fullTitle = LocalDownloadsUIState.text(activity, "", 26, Color.WHITE);
-            fullTitle.setTypeface(Typeface.DEFAULT_BOLD);
-            fullTitle.setSingleLine(true);
-            fullTitle.setEllipsize(TextUtils.TruncateAt.MARQUEE);
-            fullTitle.setGravity(Gravity.CENTER);
-            fullTitle.setMarqueeRepeatLimit(-1);
-            fullTitle.setSelected(true);
-            fullTitle.setShadowLayer(8f, 0f, 2f, Color.BLACK);
-
-            fullArtist = LocalDownloadsUIState.text(activity, "", 16, c2);
-            fullArtist.setTypeface(Typeface.DEFAULT_BOLD);
-            fullArtist.setSingleLine(true);
-            fullArtist.setGravity(Gravity.CENTER);
-            fullArtist.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 24));
-
-            fullPlayerRoot.addView(fullTitle, new LinearLayout.LayoutParams(-1, -2));
-            fullPlayerRoot.addView(fullArtist, new LinearLayout.LayoutParams(-1, -2));
-
-            fullSeek = createFullPlayerSeekBar(activity);
-            fullPlayerRoot.addView(fullSeek, new LinearLayout.LayoutParams(-1, LocalDownloadsUIState.dp(activity, LocalDownloadsUIState.SEEK_BAR_TOUCH_DP)));
-
-            LinearLayout timeRow = new LinearLayout(activity);
-            timeRow.setOrientation(LinearLayout.HORIZONTAL);
-            timeRow.setPadding(LocalDownloadsUIState.dp(activity, 8), 0, LocalDownloadsUIState.dp(activity, 8), LocalDownloadsUIState.dp(activity, 16));
-            fullCurrentTime = LocalDownloadsUIState.text(activity, "0:00", 13, Color.WHITE);
-            fullTotalTime = LocalDownloadsUIState.text(activity, "0:00", 13, Color.WHITE);
-            fullTotalTime.setGravity(Gravity.END);
-            timeRow.addView(fullCurrentTime, new LinearLayout.LayoutParams(0, -2, 1f));
-            timeRow.addView(fullTotalTime, new LinearLayout.LayoutParams(0, -2, 1f));
-            fullPlayerRoot.addView(timeRow, new LinearLayout.LayoutParams(-1, -2));
-
-            LinearLayout controlsRow = new LinearLayout(activity);
-            controlsRow.setOrientation(LinearLayout.HORIZONTAL);
-            controlsRow.setGravity(Gravity.CENTER_VERTICAL);
-            controlsRow.setPadding(0, 0, 0, LocalDownloadsUIState.dp(activity, 20));
-
-            fullShuffleBtn = new ImageButton(activity);
-            fullShuffleBtn.setBackground(LocalDownloadsUIState.createCircleRipple());
-            fullShuffleBtn.setOnClickListener(v -> {
-                OfflinePlaybackService.toggleShuffle();
-                updateFullShuffleRepeatVisuals(activity);
-            });
-            controlsRow.addView(fullShuffleBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 48), LocalDownloadsUIState.dp(activity, 48)));
-            controlsRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
-
-            fullPrevBtn = new ImageButton(activity);
-            fullPrevBtn.setBackground(LocalDownloadsUIState.createCircleRipple());
-            fullPrevBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(activity, LocalDownloadsUIState.ICON_SKIP_PREV, Color.WHITE, 0));
-            fullPrevBtn.setOnClickListener(v -> OfflinePlaybackService.skipPrevious(activity));
-            controlsRow.addView(fullPrevBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 60), LocalDownloadsUIState.dp(activity, 60)));
-            controlsRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
-
-            fullPlayBtn = new ImageButton(activity);
-            GradientDrawable fayePlayCircle = new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{c2, c1});
-            fayePlayCircle.setShape(GradientDrawable.OVAL);
-            fullPlayBtn.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(90, 255, 255, 255)), fayePlayCircle, fayePlayCircle));
-            fullPlayBtn.setElevation(LocalDownloadsUIState.dp(activity, 15f));
-            fullPlayBtn.setOnClickListener(v -> OfflinePlaybackService.toggle(activity));
-            controlsRow.addView(fullPlayBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 84), LocalDownloadsUIState.dp(activity, 84)));
-            controlsRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
-
-            fullNextBtn = new ImageButton(activity);
-            fullNextBtn.setBackground(LocalDownloadsUIState.createCircleRipple());
-            fullNextBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(activity, LocalDownloadsUIState.ICON_SKIP_NEXT, Color.WHITE, 0));
-            fullNextBtn.setOnClickListener(v -> OfflinePlaybackService.skipNext(activity));
-            controlsRow.addView(fullNextBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 60), LocalDownloadsUIState.dp(activity, 60)));
-            controlsRow.addView(new View(activity), new LinearLayout.LayoutParams(0, 1, 1f));
-
-            fullRepeatBtn = new ImageButton(activity);
-            fullRepeatBtn.setBackground(LocalDownloadsUIState.createCircleRipple());
-            fullRepeatBtn.setOnClickListener(v -> {
-                OfflinePlaybackService.cycleRepeatMode();
-                updateFullShuffleRepeatVisuals(activity);
-            });
-            controlsRow.addView(fullRepeatBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 48), LocalDownloadsUIState.dp(activity, 48)));
-            fullPlayerRoot.addView(controlsRow, new LinearLayout.LayoutParams(-1, -2));
-
-            HorizontalScrollView fayeActionsScroll = new HorizontalScrollView(activity);
-            fayeActionsScroll.setHorizontalScrollBarEnabled(false);
-            LinearLayout fayeActionsRow = new LinearLayout(activity);
-            fayeActionsRow.setOrientation(LinearLayout.HORIZONTAL);
-            fayeActionsRow.setGravity(Gravity.CENTER);
-
-            TextView fayeLyricsBtn = createYtActionPill(activity, "🎤 Sözler");
-            fayeLyricsBtn.setOnClickListener(v -> showSyncedLyricsDialog(activity, fragment));
-            fayeActionsRow.addView(fayeLyricsBtn);
-
-            TextView fayeQueueBtn = createYtActionPill(activity, "🎶 Sıradaki");
-            fayeQueueBtn.setOnClickListener(v -> showUpNextQueueDialog(activity));
-            fayeActionsRow.addView(fayeQueueBtn);
-
-            TextView fayeSleepBtn = createYtActionPill(activity, "🌙 Uyku");
-            fayeSleepBtn.setOnClickListener(v -> showSleepTimerDialog(activity, fayeSleepBtn));
-            fayeActionsRow.addView(fayeSleepBtn);
-
-            fayeActionsScroll.addView(fayeActionsRow);
-            fullPlayerRoot.addView(fayeActionsScroll, new LinearLayout.LayoutParams(-1, -2));
-
-            fayeRoot.addView(fullPlayerRoot, new FrameLayout.LayoutParams(-1, -1));
-            fullPlayerDialog.setContentView(fayeRoot);
-
-            setupDialogDismissListener(activity);
-
-            Window window = fullPlayerDialog.getWindow();
-            if (window != null) {
-                window.setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
-                OfflineHeaderBlocker.applyImmersiveFullscreen(window, true);
+                case MotionEvent.ACTION_MOVE: {
+                    float dy = startY[0] - ev.getRawY(); // yukarı = pozitif
+                    float fraction = dy / (v.getResources().getDisplayMetrics().heightPixels * 0.55f);
+                    if (isBrightness) {
+                        Window win = activity.getWindow();
+                        if (win != null) {
+                            WindowManager.LayoutParams lp = win.getAttributes();
+                            float newB = Math.max(0.05f, Math.min(1f, startBrightness[0] + fraction));
+                            lp.screenBrightness = newB;
+                            win.setAttributes(lp);
+                        }
+                    } else if (am != null) {
+                        int target = Math.round(startVolume[0] + fraction * maxVol);
+                        target = Math.max(0, Math.min(maxVol, target));
+                        am.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0);
+                    }
+                    return true;
+                }
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    return true;
+                default:
+                    return false;
             }
-
-            OfflineTrack current = LocalDownloadsUIState.findByPath(LocalDownloadsUIState.playingPath);
-            if (current != null) applyTrackVisuals(activity, current);
-            updatePlayIcon(activity, showingPause);
-
-            fullPlayerDialog.show();
-            openingFullPlayer = false;
-
-            fullPlayerRoot.setAlpha(0f);
-            fullPlayerRoot.setTranslationY(LocalDownloadsUIState.dp(activity, 30));
-            fullPlayerRoot.animate().alpha(1f).translationY(0f).setDuration(400L).setInterpolator(new DecelerateInterpolator(1.5f)).start();
-
-        } catch (RuntimeException error) {
-            handlePlayerCreationError(error);
-        }
+        });
     }
 
     private static void setupDialogDismissListener(Activity activity) {
@@ -686,7 +552,6 @@ public final class LocalDownloadsPlayer {
         final ImageView artworkInstance = fullArtwork;
         final LocalDownloadsAnimator.HaloGlowDrawable haloInstance = fullPlayerHaloDrawable;
         final LocalDownloadsAnimator.FlowingGradientDrawable gradientInstance = fullPlayerGradientDrawable;
-        final LocalDownloadsAnimator.FayeFlowingPaintDrawable fayeBgInstance = fayeBgDrawable;
 
         dialogInstance.setOnDismissListener(d -> {
             openingFullPlayer = false;
@@ -694,10 +559,8 @@ public final class LocalDownloadsPlayer {
             breathingActive = false;
 
             LocalDownloadsAnimator.stopAllPlayerAnimations(rootInstance);
-
             if (haloInstance != null) { try { haloInstance.stop(); } catch (Exception ignored) {} }
             if (gradientInstance != null) { try { gradientInstance.stop(); } catch (Exception ignored) {} }
-            if (fayeBgInstance != null) { try { fayeBgInstance.stop(); } catch (Exception ignored) {} }
 
             if (rootInstance != null) {
                 rootInstance.animate().cancel();
@@ -736,7 +599,6 @@ public final class LocalDownloadsPlayer {
                 fullShuffleBtn = null;
                 fullRepeatBtn = null;
                 fullSeek = null;
-                fayeBgDrawable = null;
             }
 
             try {
@@ -767,19 +629,16 @@ public final class LocalDownloadsPlayer {
             fullPlayerHaloView = null;
             if (fullPlayerHaloDrawable != null) { try { fullPlayerHaloDrawable.stop(); } catch (Exception ignored) {} fullPlayerHaloDrawable = null; }
             if (fullPlayerGradientDrawable != null) { try { fullPlayerGradientDrawable.stop(); } catch (Exception ignored) {} fullPlayerGradientDrawable = null; }
-            if (fayeBgDrawable != null) { try { fayeBgDrawable.stop(); } catch (Exception ignored) {} fayeBgDrawable = null; }
         }
         Logger.printException(() -> "Failed to open local full player", error);
     }
 
     private static void applyFullPlayerBackground(Context ctx) {
-        if (ctx == null || fullPlayerRoot == null || isFayeModeActive) return;
+        if (ctx == null || fullPlayerRoot == null) return;
         boolean dynamic = LocalDownloadsUIState.isPlayerDynamicColorsEnabled(ctx);
         OfflineTrack cur = LocalDownloadsUIState.findByPath(LocalDownloadsUIState.playingPath);
         Drawable scene = LocalDownloadsUIState.buildSceneBackgroundDrawable(dynamic ? cur : null, dynamic);
-
         boolean gradientEnabled = LocalDownloadsUIState.isEffectsMasterEnabled(ctx) && !LocalDownloadsUIState.isLowPowerMode(ctx);
-
         if (gradientEnabled) {
             if (fullPlayerGradientDrawable != null) { try { fullPlayerGradientDrawable.stop(); } catch (Exception ignored) {} }
             fullPlayerGradientDrawable = LocalDownloadsAnimator.createBackgroundGradient(ctx);
@@ -794,11 +653,10 @@ public final class LocalDownloadsPlayer {
     }
 
     private static void applyFocusModeVisibility(Context ctx) {
-        if (ctx == null || isFayeModeActive) return;
+        if (ctx == null) return;
         boolean focus = LocalDownloadsUIState.isFocusMode(ctx);
         boolean uiChanged = (focus != focusModeActiveLocal);
         focusModeActiveLocal = focus;
-
         if (fullPlayerActionsRow != null) {
             for (int i = 0; i < fullPlayerActionsRow.getChildCount(); i++) {
                 View child = fullPlayerActionsRow.getChildAt(i);
@@ -812,7 +670,6 @@ public final class LocalDownloadsPlayer {
                 child.setVisibility((focus && !isFocusPill) ? View.GONE : View.VISIBLE);
             }
         }
-
         if (uiChanged && fullArtwork != null) {
             LocalDownloadsAnimator.animateFocusModeTransition(fullArtwork, null, focus);
         }
@@ -956,7 +813,6 @@ public final class LocalDownloadsPlayer {
             for (OfflineTrack.LyricLine line : lyrics) {
                 String raw = line.text() == null ? "" : line.text().trim();
                 if (raw.isEmpty() || raw.equals("[TR_NATIVE_POEM_OR_SONG]")) continue;
-
                 String translatedPrefix = "└ 🇹🇷";
                 if (raw.startsWith(translatedPrefix)) {
                     String translated = raw.substring(translatedPrefix.length()).trim();
@@ -968,7 +824,6 @@ public final class LocalDownloadsPlayer {
                     if (!pairs.isEmpty()) pairs.get(pairs.size() - 1).translated = translated;
                     continue;
                 }
-
                 pairs.add(new LyricPair(line.timeMs(), raw, ""));
             }
 
@@ -1012,12 +867,10 @@ public final class LocalDownloadsPlayer {
             activity.runOnUiThread(() -> {
                 int activeIdx = -1;
                 long adjustedPos = position + LocalDownloadsUIState.lyricsOffsetMs;
-
                 for (int i = 0; i < pairs.size(); i++) {
                     if (adjustedPos >= pairs.get(i).timeMs) activeIdx = i;
                     else break;
                 }
-
                 for (int i = 0; i < originalViews.size(); i++) {
                     boolean active = i == activeIdx;
                     TextView original = originalViews.get(i);
@@ -1025,20 +878,17 @@ public final class LocalDownloadsPlayer {
                     original.setTextSize(active ? 24 : 20);
                     if (active) original.setTypeface(Typeface.DEFAULT_BOLD);
                     else original.setTypeface(Typeface.DEFAULT);
-
                     LinearLayout row = (LinearLayout) original.getParent();
                     if (row.getChildCount() > 1) {
                         TextView translated = (TextView) row.getChildAt(1);
                         translated.setTextColor(active ? LocalDownloadsUIState.activeAccentColor() : Color.argb(90, 255, 255, 255));
                         translated.setTextSize(active ? 18 : 16);
                     }
-
                     if (active && !userIsScrolling[0]) {
                         if (previousActiveLyric[0] != activeIdx) {
                             View lyricRow = lyricRows.get(i);
                             int scrollY = lyricRow.getTop() - (scroll.getHeight() / 2) + (lyricRow.getHeight() / 2);
                             scroll.smoothScrollTo(0, Math.max(0, scrollY));
-
                             lyricRow.setAlpha(0.8f);
                             lyricRow.animate().alpha(1f).setDuration(200).start();
                         }
@@ -1125,7 +975,10 @@ public final class LocalDownloadsPlayer {
         dialog.show();
     }
 
-    // GÖREV 8: Kuyruk Görünümü Yeniden Tasarlandı
+    /**
+     * Sıradaki şarkılar diyaloğu — RAM tabanlı hızlı açılış.
+     * Disk okuma yok, sadece bir kez in-memory map oluşturulur ve rebuild'lerde yeniden kullanılır.
+     */
     public static void showUpNextQueueDialog(Context ctx) {
         List<String> queue = new ArrayList<>(OfflinePlaybackService.getCurrentQueue());
         if (queue.isEmpty()) {
@@ -1136,6 +989,12 @@ public final class LocalDownloadsPlayer {
         final int swipeThreshold = LocalDownloadsUIState.dp(ctx, 140);
         final int touchSlop = LocalDownloadsUIState.dp(ctx, 12);
         final int screenWidth = ctx.getResources().getDisplayMetrics().widthPixels;
+
+        // RAM önbelleği — disk okumayı engeller
+        final Map<String, OfflineTrack> trackCache = new HashMap<>();
+        for (OfflineTrack tr : LocalDownloadsUIState.tracks) {
+            trackCache.put(tr.audioFile().getAbsolutePath(), tr);
+        }
 
         LinearLayout sheet = new LinearLayout(ctx);
         sheet.setOrientation(LinearLayout.VERTICAL);
@@ -1174,9 +1033,15 @@ public final class LocalDownloadsPlayer {
 
             for (int i = 0; i < liveQ.size(); i++) {
                 final int index = i;
-                OfflineTrack t = LocalDownloadsUIState.findByPath(liveQ.get(i));
-                if (t == null) t = OfflineTrack.load(new File(liveQ.get(i)));
-                final OfflineTrack track = t;
+                String path = liveQ.get(i);
+
+                // RAM'den oku, sadece yoksa bir kez diskten
+                OfflineTrack cached = trackCache.get(path);
+                if (cached == null) {
+                    cached = OfflineTrack.load(new File(path));
+                    trackCache.put(path, cached);
+                }
+                final OfflineTrack track = cached;
 
                 FrameLayout rowWrapper = new FrameLayout(ctx);
                 LinearLayout.LayoutParams wrapperLp = new LinearLayout.LayoutParams(-1, -2);
@@ -1206,7 +1071,17 @@ public final class LocalDownloadsPlayer {
                 int p = LocalDownloadsUIState.dp(ctx, 8);
                 item.setPadding(p, p, p, p);
                 boolean isDragged = (index == draggedIndex[0]);
-                item.setBackground(isDragged ? LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 12), true) : LocalDownloadsUIState.rowBackground(ctx, i == activeIdx));
+
+                // Kritik: Şarkı satırı arka planı artık TAMAMEN OPAK (kırmızı silme arka planı görünmez)
+                GradientDrawable opaqueBg = new GradientDrawable();
+                opaqueBg.setColor(LocalDownloadsUIState.currentTheme.varBgMid);
+                opaqueBg.setCornerRadius(LocalDownloadsUIState.dp(ctx, 12));
+                opaqueBg.setStroke(LocalDownloadsUIState.dp(ctx, 1),
+                        isDragged ? LocalDownloadsUIState.activeAccentColor()
+                                : (index == activeIdx ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.currentTheme.varGlassBorder));
+                item.setBackground(new RippleDrawable(
+                        ColorStateList.valueOf(LocalDownloadsUIState.rippleColor()),
+                        opaqueBg, opaqueBg));
                 rowWrapper.addView(item, new FrameLayout.LayoutParams(-1, -2));
 
                 TextView dragHandle = LocalDownloadsUIState.text(ctx, "≡", 24, isDragged ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
@@ -1220,7 +1095,6 @@ public final class LocalDownloadsPlayer {
                                 startY = event.getRawY();
                                 draggedIndex[0] = index;
                                 v.getParent().requestDisallowInterceptTouchEvent(true);
-                                item.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 12), true));
                                 return true;
                             }
                             case MotionEvent.ACTION_MOVE -> {
@@ -1257,7 +1131,8 @@ public final class LocalDownloadsPlayer {
                 col.setOrientation(LinearLayout.VERTICAL);
                 col.setPadding(LocalDownloadsUIState.dp(ctx, 12), 0, LocalDownloadsUIState.dp(ctx, 8), 0);
 
-                TextView title = LocalDownloadsUIState.text(ctx, track.displayTitle(), 15, i == activeIdx ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.primaryTextColor());
+                TextView title = LocalDownloadsUIState.text(ctx, track.displayTitle(), 15,
+                        i == activeIdx ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.primaryTextColor());
                 title.setTypeface(i == activeIdx ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
                 title.setSingleLine(true);
                 title.setEllipsize(TextUtils.TruncateAt.END);
@@ -1420,7 +1295,6 @@ public final class LocalDownloadsPlayer {
             if (fullCurrentTime != null) fullCurrentTime.setText(LocalDownloadsUIState.formatDuration(position / 1000));
             if (fullTotalTime != null) fullTotalTime.setText(LocalDownloadsUIState.formatDuration(duration / 1000));
         }
-
         if (fullPlayerHaloDrawable != null) {
             fullPlayerHaloDrawable.setPlaying(playing);
         }
@@ -1428,31 +1302,25 @@ public final class LocalDownloadsPlayer {
 
     public static void updateDynamicPlayerColors(Context ctx) {
         if (ctx == null) return;
-
         if (LocalDownloadsUIState.miniPlayer != null) {
             LocalDownloadsUIState.miniPlayer.setBackgroundColor(LocalDownloadsUIState.currentTheme.varBgMid);
         }
         if (miniProgressBar != null) {
             miniProgressBar.setProgressDrawable(LocalDownloadsUIState.createThemeProgressDrawable(LocalDownloadsUIState.dp(ctx, 2), false));
         }
-
-        if (fullPlayerRoot != null && !isFayeModeActive) {
+        if (fullPlayerRoot != null) {
             applyFullPlayerBackground(ctx);
             if (fullPlayerHaloDrawable != null) {
                 try { fullPlayerHaloDrawable.stop(); } catch (Exception ignored) {}
             }
             fullPlayerHaloDrawable = LocalDownloadsAnimator.createHaloDrawable(ctx);
-            if (fullPlayerHaloView != null) {
-                fullPlayerHaloView.setBackground(fullPlayerHaloDrawable);
-            }
+            if (fullPlayerHaloView != null) fullPlayerHaloView.setBackground(fullPlayerHaloDrawable);
             applyEffectsVisibility(ctx);
         }
-
         if (fullSeek != null) {
             fullSeek.setProgressDrawable(LocalDownloadsUIState.createThemeProgressDrawable(LocalDownloadsUIState.dp(ctx, LocalDownloadsUIState.SEEK_BAR_HEIGHT_DP), true));
             fullSeek.invalidate();
         }
-
         updatePlayIcon(ctx, showingPause);
         updateFullShuffleRepeatVisuals(ctx);
     }
@@ -1460,24 +1328,20 @@ public final class LocalDownloadsPlayer {
     private static void updatePlayIcon(Context ctx, boolean playing) {
         showingPause = playing;
         int iconType = playing ? LocalDownloadsUIState.ICON_PAUSE : LocalDownloadsUIState.ICON_PLAY;
-
         if (fullPlayBtn != null) {
-            if (isFayeModeActive) {
-                fullPlayBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, iconType, Color.WHITE, 0));
-            } else {
-                GradientDrawable playCircle = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                        new int[]{LocalDownloadsUIState.activeAccentColor(), LocalDownloadsUIState.activeSecondaryAccent()});
-                playCircle.setShape(GradientDrawable.OVAL);
-                fullPlayBtn.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(90, 255, 255, 255)), playCircle, playCircle));
-                fullPlayBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, iconType, LocalDownloadsUIState.currentTheme.varOnAccent, 0));
-            }
+            GradientDrawable playCircle = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                    new int[]{LocalDownloadsUIState.activeAccentColor(), LocalDownloadsUIState.activeSecondaryAccent()});
+            playCircle.setShape(GradientDrawable.OVAL);
+            fullPlayBtn.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(90, 255, 255, 255)), playCircle, playCircle));
+            fullPlayBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, iconType, LocalDownloadsUIState.currentTheme.varOnAccent, 0));
         }
         if (miniPlay != null) {
             miniPlay.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, iconType, Color.WHITE, 0));
         }
-
         if (fullArtwork != null && isFullPlayerShowing()) {
-            boolean breathingEnabled = LocalDownloadsUIState.isPlayerCoverBreathingEnabled(ctx) && LocalDownloadsUIState.isEffectsMasterEnabled(ctx) && !LocalDownloadsUIState.isLowPowerMode(ctx);
+            boolean breathingEnabled = LocalDownloadsUIState.isPlayerCoverBreathingEnabled(ctx)
+                    && LocalDownloadsUIState.isEffectsMasterEnabled(ctx)
+                    && !LocalDownloadsUIState.isLowPowerMode(ctx);
             if (playing && breathingEnabled && !breathingActive) {
                 breathingActive = true;
                 LocalDownloadsAnimator.applyArtworkBreathingEffect(fullArtwork);
@@ -1490,10 +1354,7 @@ public final class LocalDownloadsPlayer {
                 }
             }
         }
-
-        if (fullPlayerHaloDrawable != null) {
-            fullPlayerHaloDrawable.setPlaying(playing);
-        }
+        if (fullPlayerHaloDrawable != null) fullPlayerHaloDrawable.setPlaying(playing);
     }
 
     private static void updateFullShuffleRepeatVisuals(Context ctx) {
@@ -1516,7 +1377,6 @@ public final class LocalDownloadsPlayer {
         if (fullTitle != null) fullTitle.setText(track.displayTitle());
         if (fullArtist != null) fullArtist.setText(track.displayArtist());
         if (fullArtwork != null) LocalDownloadsUIState.loadArtworkAsync(track, LocalDownloadsUIState.FULL_ARTWORK_PIXELS, fullArtwork);
-
         updateDynamicPlayerColors(ctx);
     }
 
@@ -1535,14 +1395,12 @@ public final class LocalDownloadsPlayer {
         SeekBar seek = new SeekBar(ctx);
         seek.setPadding(LocalDownloadsUIState.dp(ctx, 10), 0, LocalDownloadsUIState.dp(ctx, 10), 0);
         seek.setProgressDrawable(LocalDownloadsUIState.createThemeProgressDrawable(LocalDownloadsUIState.dp(ctx, LocalDownloadsUIState.SEEK_BAR_HEIGHT_DP), true));
-
         Drawable thumb = new Drawable() {
             private final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
-            @Override
-            public void draw(@NonNull Canvas canvas) {
+            @Override public void draw(@NonNull Canvas canvas) {
                 float cx = getBounds().exactCenterX();
                 float cy = getBounds().exactCenterY();
-                p.setColor(isFayeModeActive ? LocalDownloadsUIState.currentTheme.varAccentSecondary : LocalDownloadsUIState.activeAccentColor());
+                p.setColor(LocalDownloadsUIState.activeAccentColor());
                 canvas.drawCircle(cx, cy, LocalDownloadsUIState.dp(ctx, LocalDownloadsUIState.SEEK_THUMB_DP) / 2f, p);
                 p.setColor(Color.WHITE);
                 canvas.drawCircle(cx, cy, LocalDownloadsUIState.dp(ctx, LocalDownloadsUIState.SEEK_THUMB_DP) / 4f, p);

@@ -70,7 +70,6 @@ public final class LocalDownloadManager {
         void onDownloadStateChanged(String videoId, boolean completed);
     }
 
-    // GÖREV 5: Şiir siteleri tamamen kaldırıldı. Sadece gerçek lirik API'leri.
     public enum LyricsSource {
         AUTO_ALL("Otomatik (Tam Eşleşme)"),
         GENIUS("Genius (Geniş Arşiv)"),
@@ -129,6 +128,17 @@ public final class LocalDownloadManager {
     private static final int MAX_STALLED_ATTEMPTS = 4;
     private static final int MAX_CONTINUATION_PAGES = 35;
 
+    // Kalıcı kuyruk
+    private static final String QUEUE_PREFS = "morphe_download_queue_prefs";
+    private static final String QUEUE_KEY = "pending_queue_json";
+
+    // Hız limiti kontrolü
+    private static final long RATE_CHECK_INTERVAL_MS = 300L;
+
+    // Exponential backoff
+    private static final long BASE_BACKOFF_MS = 500L;
+    private static final long MAX_BACKOFF_MS = 30_000L;
+
     private static final Pattern VIDEO_ID = Pattern.compile("[A-Za-z0-9_-]{1,20}");
     private static final Pattern PLAYLIST_PARAM = Pattern.compile("[?&]list=([A-Za-z0-9_-]+)");
     private static final Pattern BROWSE_PLAYLIST = Pattern.compile("(?:/playlist/|/browse/)(VL[A-Za-z0-9_-]+|PL[A-Za-z0-9_-]+|OLAK[A-Za-z0-9_-]+|LM|LL)");
@@ -173,22 +183,16 @@ public final class LocalDownloadManager {
     }
 
     public static List<QueueItem> getQueueSnapshot() {
-        synchronized (QUEUE_MAP) {
-            return new ArrayList<>(QUEUE_MAP.values());
-        }
+        synchronized (QUEUE_MAP) { return new ArrayList<>(QUEUE_MAP.values()); }
     }
 
     public static List<QueueItem> getFailedSnapshot() {
-        synchronized (FAILED_MAP) {
-            return new ArrayList<>(FAILED_MAP.values());
-        }
+        synchronized (FAILED_MAP) { return new ArrayList<>(FAILED_MAP.values()); }
     }
 
     public static long getTotalActiveSpeedBytesPerSec() {
         long total = 0L;
-        for (QueueItem item : getQueueSnapshot()) {
-            if (item.active()) total += item.speedBytesPerSec();
-        }
+        for (QueueItem item : getQueueSnapshot()) if (item.active()) total += item.speedBytesPerSec();
         return total;
     }
 
@@ -203,6 +207,7 @@ public final class LocalDownloadManager {
             QUEUE_MAP.clear();
             QUEUE_MAP.putAll(reordered);
         }
+        saveQueuePersist();
         notifyListeners(videoId, false);
     }
 
@@ -214,12 +219,14 @@ public final class LocalDownloadManager {
             enqueue(item.videoId(), item.playlistName(), false);
             count++;
         }
+        saveQueuePersist();
         notifyListeners("", false);
         return count;
     }
 
     public static void clearFailedDownloads() {
         FAILED_MAP.clear();
+        saveQueuePersist();
         notifyListeners("", false);
     }
 
@@ -229,6 +236,7 @@ public final class LocalDownloadManager {
         QUEUE_MAP.remove(videoId);
         FAILED_MAP.remove(videoId);
         ACTIVE_DOWNLOADS.remove(videoId);
+        saveQueuePersist();
         notifyListeners(videoId, false);
     }
 
@@ -240,6 +248,7 @@ public final class LocalDownloadManager {
         ACTIVE_DOWNLOADS.clear();
         ACTIVE_PLAYLIST_JOBS.clear();
         CANCELLED_IDS.clear();
+        clearPersistedQueue();
 
         if (musicRoot != null && musicRoot.isDirectory()) {
             File[] partFiles = musicRoot.listFiles(f -> f.isFile() && f.getName().endsWith(".part"));
@@ -256,6 +265,71 @@ public final class LocalDownloadManager {
 
         notifyListeners("", true);
     }
+
+    // ==================== KALICI KUYRUK (SharedPreferences) ====================
+
+    private static void saveQueuePersist() {
+        try {
+            Context ctx = Utils.getContext();
+            if (ctx == null) return;
+            JSONArray arr = new JSONArray();
+            synchronized (QUEUE_MAP) {
+                for (QueueItem item : QUEUE_MAP.values()) {
+                    JSONObject o = new JSONObject();
+                    o.put("videoId", item.videoId());
+                    o.put("title", item.title());
+                    o.put("playlist", item.playlistName());
+                    arr.put(o);
+                }
+            }
+            ctx.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(QUEUE_KEY, arr.toString()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    private static void clearPersistedQueue() {
+        try {
+            Context ctx = Utils.getContext();
+            if (ctx == null) return;
+            ctx.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(QUEUE_KEY).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Önceki oturumdan kalan indirme kuyruğunu geri yükler.
+     * {@link OfflineIntegrationPatch#startOnlinePlayAnalyzer(Context)} içinden
+     * uygulama açılışında bir defa çağrılır.
+     */
+    public static void restorePersistedQueue() {
+        try {
+            Context ctx = Utils.getContext();
+            if (ctx == null) return;
+            SharedPreferences sp = ctx.getSharedPreferences(QUEUE_PREFS, Context.MODE_PRIVATE);
+            String json = sp.getString(QUEUE_KEY, "");
+            if (json == null || json.isBlank()) return;
+            JSONArray arr = new JSONArray(json);
+            final int epoch = CANCEL_EPOCH.get();
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject o = arr.optJSONObject(i);
+                if (o == null) continue;
+                String vid = o.optString("videoId", "");
+                String title = o.optString("title", vid);
+                String playlist = o.optString("playlist", "Tekli İndirme");
+                if (vid.isEmpty()) continue;
+                if (ACTIVE_DOWNLOADS.contains(vid) || QUEUE_MAP.containsKey(vid)) continue;
+                File musicRoot = new File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Morphe");
+                if (OfflineStorage.isTrackDownloaded(musicRoot, vid)) continue;
+                putQueueItem(vid, title, playlist, 0, false, 0L, 0L, 0L);
+                SINGLE_DOWNLOAD_EXECUTOR.submit(() ->
+                        downloadBlocking(epoch, vid, title, null, null, 0, null, playlist, false));
+            }
+            sp.edit().remove(QUEUE_KEY).apply();
+            notifyListeners("", false);
+        } catch (Exception ignored) {}
+    }
+
+    // ==================== KUYRUK YÖNETİMİ ====================
 
     private static void putQueueItem(String videoId, String title, @Nullable String playlist,
                                      int progress, boolean active, long downloadedBytes,
@@ -318,6 +392,8 @@ public final class LocalDownloadManager {
             return;
         }
 
+        saveQueuePersist();
+
         final boolean isPlayingTrack = videoId.equals(VideoInformation.getVideoId());
         ScrobbleManager metadata = ScrobbleManager.getInstance();
 
@@ -336,9 +412,14 @@ public final class LocalDownloadManager {
         }
         notifyListeners(videoId, false);
 
-        SINGLE_DOWNLOAD_EXECUTOR.submit(() -> {
-            downloadBlocking(epoch, videoId, title, artist, album, duration, artwork, targetPlaylistName, showToasts);
-        });
+        final String fTitle = title;
+        final String fArtist = artist;
+        final String fAlbum = album;
+        final int fDuration = duration;
+        final Bitmap fArtwork = artwork;
+
+        SINGLE_DOWNLOAD_EXECUTOR.submit(() ->
+                downloadBlocking(epoch, videoId, fTitle, fArtist, fAlbum, fDuration, fArtwork, targetPlaylistName, showToasts));
     }
 
     public static LyricsSource getSavedLyricsSource() {
@@ -459,10 +540,7 @@ public final class LocalDownloadManager {
         if (!file.isFile()) return false;
         try {
             String value = OfflineStorage.readText(file);
-            if (isGibberishOrCorruptedLyrics(value)) {
-                OfflineStorage.delete(file);
-                return false;
-            }
+            if (isGibberishOrCorruptedLyrics(value)) { OfflineStorage.delete(file); return false; }
             if (value.contains("[TR_NATIVE_POEM_OR_SONG]")) return true;
             String stripped = stripExistingTranslations(value);
             return !value.contains("└ 🇹🇷") && isAlreadyTurkishText(stripped);
@@ -475,10 +553,7 @@ public final class LocalDownloadManager {
         if (!file.isFile()) return false;
         try {
             String value = OfflineStorage.readText(file);
-            if (isGibberishOrCorruptedLyrics(value)) {
-                OfflineStorage.delete(file);
-                return false;
-            }
+            if (isGibberishOrCorruptedLyrics(value)) { OfflineStorage.delete(file); return false; }
             return value.contains("└ 🇹🇷") || value.contains("└ TR:") || value.contains("[TR_NATIVE_POEM_OR_SONG]") || isAlreadyTurkishText(value);
         } catch (Exception ignored) { return false; }
     }
@@ -588,7 +663,6 @@ public final class LocalDownloadManager {
             if (isGibberishOrCorruptedLyrics(trimmed)) return false;
             String content = isAlreadyTurkishText(trimmed) ? "[TR_NATIVE_POEM_OR_SONG]\n" + trimmed : trimmed;
             OfflineStorage.writeText(lrcFile, content);
-
             try {
                 SharedPreferences sp = Utils.getContext().getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE);
                 sp.edit().remove("lyrics_lookup_failed_" + videoId).apply();
@@ -935,7 +1009,6 @@ public final class LocalDownloadManager {
         if (title == null || title.isBlank()) return null;
         StringBuilder url = new StringBuilder("https://lrclib.net/api/get?track_name=").append(urlEncode(title)).append("&artist_name=").append(urlEncode(artist == null ? "" : artist));
         if (durationSeconds > 0) url.append("&duration=").append(durationSeconds);
-
         String body = httpGetText(url.toString(), "https://lrclib.net/");
         if (body == null || body.isBlank()) return null;
         JSONObject json = new JSONObject(body);
@@ -952,7 +1025,6 @@ public final class LocalDownloadManager {
         if (body == null || body.isBlank()) return null;
         JSONArray results = new JSONArray(body);
         if (results.length() == 0) return null;
-
         for (int i = 0; i < results.length(); i++) {
             JSONObject item = results.optJSONObject(i);
             if (item == null) continue;
@@ -1011,7 +1083,6 @@ public final class LocalDownloadManager {
             connection.setRequestProperty("User-Agent", WEB_USER_AGENT);
             connection.setRequestProperty("Accept", "application/json, text/plain, text/html, */*");
             if (referer != null && !referer.isBlank()) connection.setRequestProperty("Referer", referer);
-
             int status = connection.getResponseCode();
             if (status < 200 || status >= 300) return null;
             InputStream stream = connection.getInputStream();
@@ -1024,20 +1095,16 @@ public final class LocalDownloadManager {
     private static String[] translateLyricsRobust(List<String> originalLines, TranslationEngine engine, @Nullable String deeplKey) {
         String[] result = new String[originalLines.size()];
         if (originalLines.isEmpty()) return result;
-
         StringBuilder batch = new StringBuilder();
         for (String line : originalLines) batch.append(line == null ? "" : line).append("\n");
-
         String translatedBatch = "";
         if (engine == TranslationEngine.DEEPL) translatedBatch = doTranslateDeepL(batch.toString(), deeplKey);
         if (translatedBatch.isBlank()) translatedBatch = doTranslateGoogleGtx(batch.toString());
-
         String[] batchLines = translatedBatch.split("\\r?\\n");
         if (!translatedBatch.isBlank() && batchLines.length == originalLines.size()) {
             for (int i = 0; i < batchLines.length; i++) result[i] = batchLines[i].trim();
             return result;
         }
-
         for (int i = 0; i < originalLines.size(); i++) {
             String line = originalLines.get(i);
             if (line == null || line.isBlank()) {
@@ -1121,7 +1188,6 @@ public final class LocalDownloadManager {
             rpcConn.setRequestProperty("User-Agent", WEB_USER_AGENT);
             rpcConn.setRequestProperty("Origin", "https://www.deepl.com");
             rpcConn.setRequestProperty("Referer", "https://www.deepl.com/");
-
             try (OutputStream os = rpcConn.getOutputStream()) { os.write(jsonStr.getBytes(StandardCharsets.UTF_8)); }
             if (rpcConn.getResponseCode() == HttpURLConnection.HTTP_OK) {
                 String resp = readStreamToString(rpcConn.getInputStream());
@@ -1183,27 +1249,23 @@ public final class LocalDownloadManager {
             if (notifyStart) Utils.runOnMainThread(() -> Utils.showToastShort("Bu liste zaten indiriliyor!"));
             return;
         }
-
         final int epoch = CANCEL_EPOCH.get();
         PLAYLIST_QUEUE_EXECUTOR.submit(() -> {
             try {
                 if (CANCEL_EPOCH.get() != epoch) return;
                 List<String> missing = OfflineStorage.getMissingVideoIds(musicRoot, playlistName, startOneBased, endOneBased);
                 missing.removeIf(id -> ACTIVE_DOWNLOADS.contains(id) || QUEUE_MAP.containsKey(id));
-
                 if (missing.isEmpty()) {
                     if (notifyStart) Utils.runOnMainThread(() -> Utils.showToastShort("Seçilen aralıktaki şarkılar zaten indirilmiş"));
                     return;
                 }
-
                 for (String id : missing) {
                     CANCELLED_IDS.remove(id);
                     putQueueItem(id, id, playlistName != null ? playlistName : "Otomatik Senkron", 0, false, 0L, 0L, 0L);
                 }
+                saveQueuePersist();
                 notifyListeners("", false);
-
                 if (notifyStart) Utils.runOnMainThread(() -> Utils.showToastShort(missing.size() + " şarkı kuyruğa eklendi"));
-
                 for (String videoId : missing) {
                     if (CANCEL_EPOCH.get() != epoch) return;
                     if (CANCELLED_IDS.remove(videoId)) { QUEUE_MAP.remove(videoId); continue; }
@@ -1229,7 +1291,6 @@ public final class LocalDownloadManager {
             Utils.runOnMainThread(() -> Utils.showToastShort("\"" + playlistName + "\" zaten kuyrukta!"));
             return;
         }
-
         final int epoch = CANCEL_EPOCH.get();
         PLAYLIST_QUEUE_EXECUTOR.submit(() -> {
             try {
@@ -1237,12 +1298,10 @@ public final class LocalDownloadManager {
                 int maxNeeded = endOneBased > 0 ? endOneBased : Integer.MAX_VALUE;
                 List<String> allResolved = resolvePlaylistOrTrackIds(rawInput, maxNeeded);
                 if (CANCEL_EPOCH.get() != epoch) return;
-
                 if (allResolved.isEmpty()) {
                     Utils.runOnMainThread(() -> Utils.showToastShort("Şarkı bulunamadı. Gizli listeler için oturum açık olmalı."));
                     return;
                 }
-
                 int fromIndex = startOneBased > 0 ? Math.max(0, startOneBased - 1) : 0;
                 int toIndex = endOneBased > 0 ? Math.min(allResolved.size(), endOneBased) : allResolved.size();
                 if (fromIndex >= allResolved.size() || fromIndex >= toIndex) {
@@ -1250,10 +1309,8 @@ public final class LocalDownloadManager {
                     toIndex = allResolved.size();
                 }
                 List<String> resolvedIds = new ArrayList<>(allResolved.subList(fromIndex, toIndex));
-
                 OfflineStorage.createPlaylist(musicRoot, playlistName, rawInput);
                 OfflineStorage.addTracksToPlaylist(musicRoot, playlistName, resolvedIds);
-
                 List<String> toDownload = new ArrayList<>();
                 for (String id : resolvedIds) {
                     if (!OfflineStorage.isTrackDownloaded(musicRoot, id) && !QUEUE_MAP.containsKey(id)) {
@@ -1262,19 +1319,16 @@ public final class LocalDownloadManager {
                         toDownload.add(id);
                     }
                 }
+                saveQueuePersist();
                 notifyListeners("", false);
-
                 if (toDownload.isEmpty()) {
                     Utils.runOnMainThread(() -> Utils.showToastShort("\"" + playlistName + "\" listesindeki seçili şarkılar zaten indirilmiş!"));
                     return;
                 }
-
                 final String rangeInfo = (startOneBased > 0 || endOneBased > 0)
                         ? " (" + (fromIndex + 1) + "-" + toIndex + ". aralıkta " + toDownload.size() + " yeni şarkı)"
                         : " (" + toDownload.size() + " şarkı)";
-
                 Utils.runOnMainThread(() -> Utils.showToastShort("\"" + playlistName + "\"" + rangeInfo + " kuyruğa alındı..."));
-
                 int count = 0;
                 for (String id : toDownload) {
                     if (CANCEL_EPOCH.get() != epoch) return;
@@ -1286,7 +1340,6 @@ public final class LocalDownloadManager {
                             (index * 100) / toDownload.size(), true, "Oynatma listesi indiriliyor...");
                     downloadBlocking(epoch, id, null, null, null, 0, null, playlistName, false);
                 }
-
                 if (CANCEL_EPOCH.get() == epoch) {
                     showDownloadNotification("playlist_sync_" + playlistName, playlistName, 100, false, toDownload.size() + " şarkı başarıyla indirildi");
                     Utils.runOnMainThread(() -> Utils.showToastShort("\"" + playlistName + "\" listesindeki " + toDownload.size() + " şarkı indirildi!"));
@@ -1305,15 +1358,12 @@ public final class LocalDownloadManager {
     private static List<String> resolvePlaylistOrTrackIds(String input, int maxLimit) {
         Set<String> ids = new LinkedHashSet<>();
         if (input == null || input.isBlank()) return new ArrayList<>();
-
         String trimmed = input.trim();
         Matcher directMatcher = DIRECT_VIDEO_ID.matcher(trimmed);
         while (directMatcher.find()) ids.add(directMatcher.group(1));
-
         String listId = extractPlaylistId(trimmed);
         if (listId != null) {
             boolean isLikedList = listId.equalsIgnoreCase("LM") || listId.equalsIgnoreCase("VLLM") || listId.equalsIgnoreCase("LL") || listId.equalsIgnoreCase("VLLL") || listId.equalsIgnoreCase("FEmusic_liked_videos");
-
             if (isLikedList) {
                 fetchInnerTubeBrowseIds("VLLM", ids, maxLimit);
                 if (ids.size() < maxLimit) fetchInnerTubeBrowseIds("FEmusic_liked_videos", ids, maxLimit);
@@ -1325,13 +1375,11 @@ public final class LocalDownloadManager {
                 fetchInnerTubeBrowseIds(browseId, ids, maxLimit);
                 if (ids.isEmpty()) fetchRemotePlaylistWebPage(listId, false, ids);
             }
-
             if (ids.isEmpty() && isLikedList) {
                 String activeId = VideoInformation.getVideoId();
                 if (activeId != null && activeId.matches("[A-Za-z0-9_-]{11}")) ids.add(activeId);
             }
         }
-
         if (ids.isEmpty()) {
             String[] tokens = trimmed.split("[\\s,;]+");
             for (String token : tokens) if (token.matches("[A-Za-z0-9_-]{11}")) ids.add(token);
@@ -1364,18 +1412,15 @@ public final class LocalDownloadManager {
             for (int page = 0; page < MAX_CONTINUATION_PAGES; page++) {
                 if (outIds.size() >= maxLimit) break;
                 String endpoint = "https://music.youtube.com/youtubei/v1/browse?prettyPrint=false";
-                String payload = (page == 0) 
+                String payload = (page == 0)
                         ? "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20260101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"browseId\":\"" + browseId + "\"}"
                         : "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20260101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"continuation\":\"" + continuation + "\"}";
-
                 String response = postInnerTubeJson(endpoint, payload);
                 if (response == null || response.isEmpty()) break;
-
                 int beforeCount = outIds.size();
                 Matcher m = JSON_VIDEO_ID.matcher(response);
                 while (m.find()) outIds.add(m.group(1));
                 if (outIds.size() >= maxLimit) break;
-
                 Matcher contMatcher = CONTINUATION_TOKEN.matcher(response);
                 String nextToken = null;
                 while (contMatcher.find()) {
@@ -1405,10 +1450,8 @@ public final class LocalDownloadManager {
             conn.setRequestProperty("Referer", "https://music.youtube.com/");
             conn.setRequestProperty("X-YouTube-Client-Name", "67");
             conn.setRequestProperty("X-YouTube-Client-Version", "1.20260101.01.00");
-
             applySessionCookiesAndAuth(conn, "https://music.youtube.com");
             try (OutputStream os = conn.getOutputStream()) { os.write(jsonPayload.getBytes(StandardCharsets.UTF_8)); }
-
             if (conn.getResponseCode() != HttpURLConnection.HTTP_OK) return null;
             return readStreamToString(conn.getInputStream());
         } catch (Exception ex) {
@@ -1429,7 +1472,6 @@ public final class LocalDownloadManager {
             conn.setRequestProperty("User-Agent", WEB_USER_AGENT);
             conn.setRequestProperty("Accept-Language", "en-US,en;q=0.9");
             applySessionCookiesAndAuth(conn, musicDomain ? "https://music.youtube.com" : "https://www.youtube.com");
-
             String html = readStreamToString(conn.getInputStream());
             Matcher m = JSON_VIDEO_ID.matcher(html);
             while (m.find()) ids.add(m.group(1));
@@ -1476,6 +1518,7 @@ public final class LocalDownloadManager {
                                          @Nullable String targetPlaylistName, boolean showToasts) {
         if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.remove(videoId)) {
             QUEUE_MAP.remove(videoId);
+            saveQueuePersist();
             notifyListeners(videoId, false);
             return;
         }
@@ -1486,6 +1529,7 @@ public final class LocalDownloadManager {
         if (targetPlaylistName != null && !targetPlaylistName.isBlank()) OfflineStorage.addTrackToPlaylist(directory, targetPlaylistName, videoId);
         if (OfflineStorage.isTrackDownloaded(directory, videoId)) {
             QUEUE_MAP.remove(videoId);
+            saveQueuePersist();
             if (showToasts) Utils.showToastShort(str("morphe_music_downloads_already_saved"));
             notifyListeners(videoId, true);
             return;
@@ -1551,6 +1595,7 @@ public final class LocalDownloadManager {
             ACTIVE_DOWNLOADS.remove(videoId);
             QUEUE_MAP.remove(videoId);
             CANCELLED_IDS.remove(videoId);
+            saveQueuePersist();
             notifyListeners(videoId, true);
         }
     }
@@ -1671,40 +1716,87 @@ public final class LocalDownloadManager {
 
     private interface ProgressCallback { void update(long bytes); }
 
-    private static void downloadRange(int epoch, String videoId, String url, File destination, long start, long end, AtomicLong downloaded, ProgressCallback progress) throws Exception {
+    /**
+     * Tek bir segmenti indirir. Destekler:
+     * <ul>
+     *   <li>Rate limit (SharedPreferences'taki KB/sn değerinin segment sayısına bölümü)</li>
+     *   <li>Exponential backoff (kesinti durumunda katlanarak artan bekleme)</li>
+     * </ul>
+     */
+    private static void downloadRange(int epoch, String videoId, String url, File destination, long start, long end,
+                                      AtomicLong downloaded, ProgressCallback progress) throws Exception {
         long position = start;
         int failures = 0;
         byte[] buffer = new byte[BUFFER_SIZE];
 
+        Context ctx = Utils.getContext();
+        int rateLimitKbps = ctx != null ? LocalDownloadsUIState.getRateLimitKbps(ctx) : 0;
+        // Her segment için toplam limitin 1/SEGMENT_COUNT'u kadar indir
+        long rateLimitBytesPerSec = rateLimitKbps > 0 ? (rateLimitKbps * 1024L) / SEGMENT_COUNT : 0L;
+        long lastRateCheck = System.currentTimeMillis();
+        long bytesInWindow = 0L;
+
         try (RandomAccessFile output = new RandomAccessFile(destination, "rw")) {
             while (position <= end) {
-                if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId) || Thread.currentThread().isInterrupted()) throw new InterruptedException("Download cancelled");
+                if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId) || Thread.currentThread().isInterrupted())
+                    throw new InterruptedException("Download cancelled");
                 awaitIfPaused(epoch, videoId);
                 long before = position;
                 HttpURLConnection connection = openAudioConnection(url, position, end);
 
                 try {
-                    if (connection.getResponseCode() != HttpURLConnection.HTTP_PARTIAL) throw new IllegalStateException("Range request returned HTTP " + connection.getResponseCode());
+                    if (connection.getResponseCode() != HttpURLConnection.HTTP_PARTIAL)
+                        throw new IllegalStateException("Range request returned HTTP " + connection.getResponseCode());
                     try (InputStream input = connection.getInputStream()) {
                         output.seek(position);
                         while (position <= end) {
-                            if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId)) throw new InterruptedException("Download cancelled");
+                            if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId))
+                                throw new InterruptedException("Download cancelled");
                             if (PAUSED.get()) break;
                             int read = input.read(buffer, 0, (int) Math.min(buffer.length, end - position + 1));
                             if (read < 0) break;
                             output.write(buffer, 0, read);
                             position += read;
+                            bytesInWindow += read;
+
+                            // Hız limiti denetimi
+                            if (rateLimitBytesPerSec > 0) {
+                                long now = System.currentTimeMillis();
+                                long elapsed = now - lastRateCheck;
+                                if (elapsed >= RATE_CHECK_INTERVAL_MS) {
+                                    long currentBps = bytesInWindow * 1000L / elapsed;
+                                    if (currentBps > rateLimitBytesPerSec) {
+                                        long sleepMs = (bytesInWindow * 1000L / rateLimitBytesPerSec) - elapsed;
+                                        if (sleepMs > 0 && sleepMs < 2000L) {
+                                            try { Thread.sleep(sleepMs); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                                        }
+                                    }
+                                    lastRateCheck = System.currentTimeMillis();
+                                    bytesInWindow = 0L;
+                                }
+                            }
+
                             progress.update(downloaded.addAndGet(read));
                         }
                     }
                 } catch (IOException ex) {
-                    if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId)) throw new InterruptedException("Download cancelled");
-                    Logger.printDebug(() -> "Audio range interrupted; retrying", ex);
+                    if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId))
+                        throw new InterruptedException("Download cancelled");
+                    Logger.printDebug(() -> "Audio range interrupted; will apply backoff if stalled", ex);
                 } finally {
                     connection.disconnect();
                 }
 
-                failures = position > before ? 0 : failures + 1;
+                if (position > before) {
+                    failures = 0;
+                } else {
+                    failures++;
+                    if (failures < MAX_STALLED_ATTEMPTS) {
+                        long backoff = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * (1L << Math.min(6, failures - 1)));
+                        Logger.printDebug(() -> "Range stalled; exponential backoff " + backoff + "ms (attempt " + failures + ")");
+                        try { Thread.sleep(backoff); } catch (InterruptedException ignored) { Thread.currentThread().interrupt(); }
+                    }
+                }
                 if (failures >= MAX_STALLED_ATTEMPTS) throw new IllegalStateException("Download range stalled at " + position);
             }
         }
@@ -1743,7 +1835,6 @@ public final class LocalDownloadManager {
         connection.setConnectTimeout(CONNECT_TIMEOUT_MILLISECONDS);
         connection.setReadTimeout(READ_TIMEOUT_MILLISECONDS);
         connection.setRequestProperty("User-Agent", USER_AGENT);
-
         try {
             if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) throw new IllegalStateException("HTTP " + connection.getResponseCode());
             try (InputStream input = connection.getInputStream(); FileOutputStream output = new FileOutputStream(destination)) {
@@ -1769,16 +1860,13 @@ public final class LocalDownloadManager {
         Context context = Utils.getContext();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
-
         manager.createNotificationChannel(new NotificationChannel(DOWNLOAD_CHANNEL, str("morphe_music_downloads_notification_channel"), NotificationManager.IMPORTANCE_LOW));
-
         Notification.Builder builder = new Notification.Builder(context, DOWNLOAD_CHANNEL);
         builder.setSmallIcon(ongoing ? android.R.drawable.stat_sys_download : android.R.drawable.stat_sys_download_done)
                 .setContentTitle(title == null || title.isBlank() ? "YouTube Music" : title)
                 .setContentText(text)
                 .setOngoing(ongoing)
                 .setOnlyAlertOnce(true);
-
         if (ongoing) builder.setProgress(100, Math.max(0, progress), progress < 0);
         manager.notify(key.hashCode(), builder.build());
     }
@@ -1790,10 +1878,8 @@ public final class LocalDownloadManager {
             Logger.printDebug(() -> "No cached streaming request for download, resolving: " + videoId);
             request = StreamingDataRequest.fetchRequestForDownload(videoId, SpoofVideoStreamsPatch.getAvailableClients(), Settings.SPOOF_VIDEO_STREAMS_CLIENT_TYPE.get());
         }
-
         StreamingDataRequest.StreamData stream = request.getStream();
         if (stream == null) return null;
-
         try {
             PlayerResponse response = PlayerResponse.parseFrom(stream.streamingData());
             Format best = response.getStreamingData().getAdaptiveFormatsList().stream()

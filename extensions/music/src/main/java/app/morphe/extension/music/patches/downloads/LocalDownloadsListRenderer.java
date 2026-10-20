@@ -19,6 +19,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
@@ -32,6 +33,15 @@ import java.util.Set;
 import app.morphe.extension.shared.Utils;
 
 public final class LocalDownloadsListRenderer {
+
+    /** Lazy load: her batch'te kaç satır yüklenecek. */
+    private static final int PAGE_SIZE = 40;
+
+    /** Bir scroll listener'ın bir kez eklenmesini sağlayan anahtar. */
+    private static final String SCROLL_LISTENER_TAG = "morphe_lazy_scroll_listener";
+
+    /** Ekranın altından bu kadar piksel kalınca yeni batch yükle. */
+    private static final int BOTTOM_TRIGGER_DP = 600;
 
     private LocalDownloadsListRenderer() {}
 
@@ -56,7 +66,6 @@ public final class LocalDownloadsListRenderer {
                     LocalDownloadsUIState.selectionMode ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.primaryTextColor(), 0));
         }
 
-        // GÖREV 7: Sanatçılar sekmesi kontrolü
         if (LocalDownloadsUIState.showingArtists && LocalDownloadsUIState.selectedArtist == null) {
             if (LocalDownloadsUIState.backToLibraryBtn != null) LocalDownloadsUIState.backToLibraryBtn.setVisibility(View.GONE);
             if (LocalDownloadsUIState.summary != null) {
@@ -132,7 +141,7 @@ public final class LocalDownloadsListRenderer {
 
         long totalBytes = 0;
         for (OfflineTrack t : displayed) totalBytes += t.audioFile().length();
-        
+
         String sum;
         if (LocalDownloadsUIState.showingArtists && LocalDownloadsUIState.selectedArtist != null) {
             sum = "Sanatçı: " + LocalDownloadsUIState.selectedArtist + " • " + displayed.size() + " parça";
@@ -143,27 +152,23 @@ public final class LocalDownloadsListRenderer {
             if (LocalDownloadsUIState.currentFilterMode == LocalDownloadsUIState.FilterMode.UNASSIGNED) sum = "Sahipsiz • " + displayed.size() + " parça";
             else if (LocalDownloadsUIState.currentFilterMode == LocalDownloadsUIState.FilterMode.BROKEN_OR_INCOMPLETE) sum = "Hatalı/Eksik • " + displayed.size() + " parça";
         }
-        
+
         if (pending > 0) sum += " • " + pending + " eksik";
         if (LocalDownloadsUIState.summary != null) LocalDownloadsUIState.summary.setText(sum);
 
-        int visibleRowIndex = 0;
-        boolean animateRows = LocalDownloadsUIState.animateNextSongList;
-        LocalDownloadsUIState.animateNextSongList = false;
-
+        // ==== LAZY LOAD ====
+        final List<OfflineTrack> filtered = new ArrayList<>();
         for (OfflineTrack t : displayed) {
-            if (!LocalDownloadsUIState.matchesQuery(t)) continue;
-            LocalDownloadsUIState.currentDisplayedTracks.add(t);
-            LocalDownloadsUIState.queuePaths.add(t.audioFile().getAbsolutePath());
-            View row = songRow(ctx, t, fragment);
-            LocalDownloadsUIState.songsList.addView(row);
-            if (animateRows && displayed.size() <= 80 && visibleRowIndex < 8) {
-                LocalDownloadsAnimator.animateListItemIn(ctx, row, visibleRowIndex, LocalDownloadsUIState.dp(ctx, 10));
-            }
-            visibleRowIndex++;
+            if (LocalDownloadsUIState.matchesQuery(t)) filtered.add(t);
         }
 
-        if (LocalDownloadsUIState.queuePaths.isEmpty()) {
+        // Tüm queue ve displayed state'i önceden doldur (player kuyruğu ve seçim için)
+        LocalDownloadsUIState.currentDisplayedTracks.addAll(filtered);
+        for (OfflineTrack t : filtered) {
+            LocalDownloadsUIState.queuePaths.add(t.audioFile().getAbsolutePath());
+        }
+
+        if (filtered.isEmpty()) {
             String msg = (LocalDownloadsUIState.showingArtists && LocalDownloadsUIState.selectedArtist != null)
                     ? "Bu sanatçıya ait indirilmiş şarkı bulunamadı."
                     : (LocalDownloadsUIState.currentSmartFilter != LocalDownloadsUIState.SmartFilterMode.NONE
@@ -179,7 +184,79 @@ public final class LocalDownloadsListRenderer {
             LocalDownloadsUIState.songsList.addView(empty);
             return;
         }
+
+        boolean animateRows = LocalDownloadsUIState.animateNextSongList;
+        LocalDownloadsUIState.animateNextSongList = false;
+
+        final int[] loadedCount = {0};
+        final int totalSize = filtered.size();
+        final int initial = Math.min(PAGE_SIZE, totalSize);
+
+        for (int i = 0; i < initial; i++) {
+            OfflineTrack t = filtered.get(i);
+            View row = songRow(ctx, t, fragment);
+            LocalDownloadsUIState.songsList.addView(row);
+            LocalDownloadsUIState.rowViews.add(row);
+            if (animateRows && i < 8) {
+                LocalDownloadsAnimator.animateListItemIn(ctx, row, i, LocalDownloadsUIState.dp(ctx, 10));
+            }
+        }
+        loadedCount[0] = initial;
         LocalDownloadsUIState.markPlayingRow(ctx);
+
+        // Scroll listener — sadece bir kez ekle, eğer yoksa
+        if (totalSize > initial) {
+            attachLazyScrollListener(ctx, fragment, filtered, loadedCount, totalSize);
+        }
+    }
+
+    private static void attachLazyScrollListener(Context ctx, LocalDownloadsFragment fragment,
+                                                 final List<OfflineTrack> filtered,
+                                                 final int[] loadedCount, final int totalSize) {
+        final ScrollView scroll = findParentScrollView(LocalDownloadsUIState.songsList);
+        if (scroll == null) return;
+
+        // Önceki listener'ı temizle (varsa)
+        Object previous = scroll.getTag(SCROLL_LISTENER_TAG.hashCode());
+        if (previous instanceof View.OnScrollChangeListener old) {
+            scroll.setOnScrollChangeListener(null);
+        }
+
+        final int triggerPx = LocalDownloadsUIState.dp(ctx, BOTTOM_TRIGGER_DP);
+
+        View.OnScrollChangeListener listener = (v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (loadedCount[0] >= totalSize) return;
+            View child = v.getChildAt(0);
+            if (child == null) return;
+            int distanceFromBottom = child.getHeight() - (scrollY + v.getHeight());
+            if (distanceFromBottom > triggerPx) return;
+
+            int next = Math.min(totalSize, loadedCount[0] + PAGE_SIZE);
+            for (int i = loadedCount[0]; i < next; i++) {
+                OfflineTrack t = filtered.get(i);
+                View row = songRow(ctx, t, fragment);
+                LocalDownloadsUIState.songsList.addView(row);
+                LocalDownloadsUIState.rowViews.add(row);
+            }
+            loadedCount[0] = next;
+            LocalDownloadsUIState.markPlayingRow(ctx);
+
+            if (loadedCount[0] >= totalSize) {
+                scroll.setOnScrollChangeListener(null);
+            }
+        };
+
+        scroll.setTag(SCROLL_LISTENER_TAG.hashCode(), listener);
+        scroll.setOnScrollChangeListener(listener);
+    }
+
+    private static ScrollView findParentScrollView(View v) {
+        android.view.ViewParent p = v.getParent();
+        while (p != null) {
+            if (p instanceof ScrollView sv) return sv;
+            p = p.getParent();
+        }
+        return null;
     }
 
     private static String smartFilterLabel() {
@@ -192,9 +269,8 @@ public final class LocalDownloadsListRenderer {
         };
     }
 
-    // GÖREV 7: Sanatçı Rafı Performans Optimizasyonu
     private static void renderArtistsSection(Context ctx, File musicRoot, LocalDownloadsFragment fragment) {
-        List<String> artists = LocalDownloadsUIState.getAllArtists(); // Önbellekten gelir
+        List<String> artists = LocalDownloadsUIState.getAllArtists();
         boolean animateCards = LocalDownloadsUIState.animateNextSongList;
         LocalDownloadsUIState.animateNextSongList = false;
 
@@ -209,7 +285,7 @@ public final class LocalDownloadsListRenderer {
         int screenW = ctx.getResources().getDisplayMetrics().widthPixels;
         int cardW = (screenW - LocalDownloadsUIState.dp(ctx, 36)) / 2;
         LinearLayout currentRow = null;
-        
+
         for (int i = 0; i < artists.size(); i++) {
             if (i % 2 == 0) {
                 currentRow = new LinearLayout(ctx);
@@ -217,14 +293,12 @@ public final class LocalDownloadsListRenderer {
                 currentRow.setPadding(0, 0, 0, LocalDownloadsUIState.dp(ctx, 14));
                 LocalDownloadsUIState.songsList.addView(currentRow, new LinearLayout.LayoutParams(-1, -2));
             }
-            
             String artistName = artists.get(i);
             View card = createArtistCard(ctx, artistName, cardW, fragment);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW, -2);
             if (i % 2 == 0) lp.setMargins(0, 0, LocalDownloadsUIState.dp(ctx, 12), 0);
             card.setLayoutParams(lp);
             currentRow.addView(card);
-            
             if (animateCards && i < 8) {
                 LocalDownloadsAnimator.animateListItemIn(ctx, card, i, LocalDownloadsUIState.dp(ctx, 10));
             }
@@ -241,14 +315,11 @@ public final class LocalDownloadsListRenderer {
         int imgSize = widthPx - LocalDownloadsUIState.dp(ctx, 48);
         ImageView avatar = new ImageView(ctx);
         avatar.setBackgroundColor(Color.argb(45, 255, 255, 255));
-        
         avatar.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline outline) { outline.setOval(0, 0, view.getWidth(), view.getHeight()); }
+            @Override public void getOutline(View view, Outline outline) { outline.setOval(0, 0, view.getWidth(), view.getHeight()); }
         });
         avatar.setClipToOutline(true);
 
-        // GÖREV 7: Sanatçıya ait ilk şarkıyı bulup kapağını avatar olarak kullan (Optimize edilmiş arama)
         OfflineTrack firstTrack = null;
         for (OfflineTrack t : LocalDownloadsUIState.tracks) {
             if (t.displayArtist().equalsIgnoreCase(artistName)) { firstTrack = t; break; }
@@ -258,7 +329,7 @@ public final class LocalDownloadsListRenderer {
             avatar.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_PLAY, LocalDownloadsUIState.activeAccentColor(), 0));
             avatar.setPadding(LocalDownloadsUIState.dp(ctx, 20), LocalDownloadsUIState.dp(ctx, 20), LocalDownloadsUIState.dp(ctx, 20), LocalDownloadsUIState.dp(ctx, 20));
         }
-        
+
         card.addView(avatar, new LinearLayout.LayoutParams(imgSize, imgSize));
 
         TextView title = LocalDownloadsUIState.text(ctx, artistName, 15, LocalDownloadsUIState.primaryTextColor());
@@ -271,7 +342,7 @@ public final class LocalDownloadsListRenderer {
 
         int trackCount = 0;
         for (OfflineTrack t : LocalDownloadsUIState.tracks) if (t.displayArtist().equalsIgnoreCase(artistName)) trackCount++;
-        
+
         TextView count = LocalDownloadsUIState.text(ctx, trackCount + " şarkı", 12, LocalDownloadsUIState.secondary());
         count.setSingleLine(true);
         count.setGravity(Gravity.CENTER);
@@ -298,16 +369,14 @@ public final class LocalDownloadsListRenderer {
         headerCard.setLayoutParams(cardLp);
 
         int coverSize = LocalDownloadsUIState.dp(ctx, 130);
-        
         ImageView coverView = new ImageView(ctx);
         coverView.setBackgroundColor(Color.argb(45, 255, 255, 255));
         coverView.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline outline) { outline.setOval(0, 0, view.getWidth(), view.getHeight()); }
+            @Override public void getOutline(View view, Outline outline) { outline.setOval(0, 0, view.getWidth(), view.getHeight()); }
         });
         coverView.setClipToOutline(true);
         coverView.setElevation(LocalDownloadsUIState.dp(ctx, 8f));
-        
+
         OfflineTrack firstTrack = null;
         for (OfflineTrack t : LocalDownloadsUIState.tracks) {
             if (t.displayArtist().equalsIgnoreCase(artistName)) { firstTrack = t; break; }
@@ -341,7 +410,7 @@ public final class LocalDownloadsListRenderer {
         playBtn.setBackground(playCircle);
         playBtn.setImageDrawable(LocalDownloadsUIState.createVectorIconDrawable(ctx, LocalDownloadsUIState.ICON_PLAY, LocalDownloadsUIState.currentTheme.varOnAccent, 0));
         playBtn.setContentDescription("Sanatçıyı Çal");
-        
+
         final OfflineTrack finalFirstTrack = firstTrack;
         playBtn.setOnClickListener(v -> {
             if (finalFirstTrack != null) {
@@ -412,6 +481,16 @@ public final class LocalDownloadsListRenderer {
         }
     }
 
+    /** Playlist'teki toplam süreyi (saniye) hesaplar. */
+    private static int computePlaylistTotalSeconds(OfflineStorage.Playlist pl) {
+        int total = 0;
+        for (String id : pl.videoIds()) {
+            OfflineTrack t = LocalDownloadsUIState.findById(id);
+            if (t != null && t.durationSeconds() > 0) total += t.durationSeconds();
+        }
+        return total;
+    }
+
     public static View createYtMusicGridCard(Context ctx, File musicRoot, OfflineStorage.Playlist pl, int widthPx, LocalDownloadsFragment fragment) {
         LinearLayout card = new LinearLayout(ctx);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -432,7 +511,11 @@ public final class LocalDownloadsListRenderer {
         title.setPadding(LocalDownloadsUIState.dp(ctx, 2), LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 2), LocalDownloadsUIState.dp(ctx, 2));
         card.addView(title);
 
-        String subLabel = pl.isSmart() ? "Sabit Koleksiyon • " + pl.videoIds().size() + " parça" : "Oynatma listesi • " + pl.videoIds().size() + " parça";
+        int totalSec = computePlaylistTotalSeconds(pl);
+        String durationStr = totalSec > 0 ? LocalDownloadsUIState.formatLongDuration(totalSec) : null;
+        String subLabel = (pl.isSmart() ? "Sabit Koleksiyon" : "Oynatma listesi")
+                + " • " + pl.videoIds().size() + " parça"
+                + (durationStr != null ? " • " + durationStr : "");
         TextView count = LocalDownloadsUIState.text(ctx, subLabel, 12, LocalDownloadsUIState.secondary());
         count.setSingleLine(true);
         count.setPadding(LocalDownloadsUIState.dp(ctx, 2), 0, LocalDownloadsUIState.dp(ctx, 2), 0);
@@ -473,7 +556,12 @@ public final class LocalDownloadsListRenderer {
         info.setPadding(LocalDownloadsUIState.dp(ctx, 14), 0, LocalDownloadsUIState.dp(ctx, 8), 0);
         TextView name = LocalDownloadsUIState.text(ctx, pl.name(), 15, LocalDownloadsUIState.primaryTextColor());
         name.setTypeface(Typeface.DEFAULT_BOLD);
-        String subLabel = (pl.isSmart() ? "Sabit Koleksiyon • " : "Oynatma listesi • ") + pl.videoIds().size() + " parça";
+
+        int totalSec = computePlaylistTotalSeconds(pl);
+        String durationStr = totalSec > 0 ? LocalDownloadsUIState.formatLongDuration(totalSec) : null;
+        String subLabel = (pl.isSmart() ? "Sabit Koleksiyon" : "Oynatma listesi")
+                + " • " + pl.videoIds().size() + " parça"
+                + (durationStr != null ? " • " + durationStr : "");
         TextView sub = LocalDownloadsUIState.text(ctx, subLabel, 12, LocalDownloadsUIState.secondary());
         info.addView(name);
         info.addView(sub);
@@ -649,7 +737,6 @@ public final class LocalDownloadsListRenderer {
         LinearLayout row = new LinearLayout(ctx);
         row.setGravity(Gravity.CENTER_VERTICAL);
         row.setPadding(LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 7), LocalDownloadsUIState.dp(ctx, 8), LocalDownloadsUIState.dp(ctx, 7));
-        LocalDownloadsUIState.rowViews.add(row);
 
         final boolean isSelected = LocalDownloadsUIState.selectedVideoIds.contains(track.videoId());
 
@@ -676,7 +763,6 @@ public final class LocalDownloadsListRenderer {
         name.setSingleLine(true);
         name.setEllipsize(android.text.TextUtils.TruncateAt.END);
 
-        // GÖREV 6: Şarkı Süresi Eklendi
         TextView detail = LocalDownloadsUIState.text(
                 ctx,
                 track.displayArtist() + " • " + track.formattedDuration() + " • " + LocalDownloadsUIState.formatSize(track.audioFile().length()) + " MB",

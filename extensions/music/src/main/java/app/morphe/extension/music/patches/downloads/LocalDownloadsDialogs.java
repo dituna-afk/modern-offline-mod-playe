@@ -80,44 +80,6 @@ public final class LocalDownloadsDialogs {
         topRow.addView(closeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 36), LocalDownloadsUIState.dp(activity, 36)));
         sheet.addView(topRow, new LinearLayout.LayoutParams(-1, -2));
 
-        // GÖREV 2: Oynatıcı Seçimi (Normal vs Faye)
-        TextView secPlayer = LocalDownloadsUIState.text(activity, "🎧 Tam Ekran Oynatıcı Türü", 14, LocalDownloadsUIState.activeAccentColor());
-        secPlayer.setTypeface(Typeface.DEFAULT_BOLD);
-        secPlayer.setPadding(0, LocalDownloadsUIState.dp(activity, 14), 0, LocalDownloadsUIState.dp(activity, 8));
-        sheet.addView(secPlayer);
-
-        boolean isFaye = LocalDownloadsUIState.isPlayer2FayeSelected(activity);
-        TextView playerTypeBtn = LocalDownloadsUIState.text(activity, isFaye ? "✨ Oynatıcı 2 (Faye Tarzı)" : "📱 Normal Oynatıcı", 14, LocalDownloadsUIState.primaryTextColor());
-        playerTypeBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        playerTypeBtn.setPadding(LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12));
-        playerTypeBtn.setBackground(LocalDownloadsUIState.glassCardDrawable(activity, LocalDownloadsUIState.dp(activity, 10), true));
-        LinearLayout.LayoutParams pTypeLp = new LinearLayout.LayoutParams(-1, -2);
-        pTypeLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 8));
-        playerTypeBtn.setLayoutParams(pTypeLp);
-        sheet.addView(playerTypeBtn);
-
-        playerTypeBtn.setOnClickListener(v -> {
-            String[] items = {"📱 Normal Oynatıcı", "✨ Oynatıcı 2 (Faye Tarzı)"};
-            LocalDownloadsUIState.showMenu(activity, playerTypeBtn, items, LocalDownloadsUIState.isPlayer2FayeSelected(activity) ? 1 : 0, pos -> {
-                LocalDownloadsUIState.setPlayer2FayeSelected(activity, pos == 1);
-                playerTypeBtn.setText(items[pos]);
-                Utils.showToastShort(items[pos] + " seçildi");
-                // Değişiklik anında etki etsin diye açık oynatıcıyı kapat
-                LocalDownloadsPlayer.dismissFullPlayerIfShowing();
-            });
-        });
-
-        if (isFaye) {
-            TextView fayeSettingsBtn = LocalDownloadsUIState.createPillButton(activity, "🎨 Faye Tarzı Oynatıcı Ayarları", true);
-            fayeSettingsBtn.setOnClickListener(v -> {
-                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showPlayer2FayeSettingsDialog(activity, fragment));
-            });
-            LinearLayout.LayoutParams fayeLp = new LinearLayout.LayoutParams(-1, -2);
-            fayeLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 8));
-            fayeSettingsBtn.setLayoutParams(fayeLp);
-            sheet.addView(fayeSettingsBtn);
-        }
-
         // 1. Tema Paletleri
         TextView secTheme = LocalDownloadsUIState.text(activity, "🎨 Uygulama Tema Paleti", 14, LocalDownloadsUIState.activeAccentColor());
         secTheme.setTypeface(Typeface.DEFAULT_BOLD);
@@ -144,18 +106,38 @@ public final class LocalDownloadsDialogs {
             if (isSelected) tName.setTypeface(Typeface.DEFAULT_BOLD);
             themeRow.addView(tName, new LinearLayout.LayoutParams(0, -2, 1f));
 
-            TextView badge = LocalDownloadsUIState.text(activity, isSelected ? "Aktif ✓" : "Seç", 12, isSelected ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
+            TextView badge = LocalDownloadsUIState.text(activity, isSelected ? "Aktif ✓" : "Seç", 12,
+                    isSelected ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
             badge.setTypeface(Typeface.DEFAULT_BOLD);
             themeRow.addView(badge);
 
             themeRow.setOnClickListener(v -> {
                 LocalDownloadsUIState.currentTheme = palette;
                 LocalDownloadsUIState.savePreferences(activity);
+                LocalDownloadsUIState.applyHexOverrides(activity);
                 LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
                 LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> Utils.showToastShort("Tema uygulandı: " + palette.label));
             });
             sheet.addView(themeRow);
         }
+
+        // 1b. HEX Renk Özelleştirmesi
+        TextView secHex = LocalDownloadsUIState.text(activity, "🎨 Özel HEX Renkleri", 14, LocalDownloadsUIState.activeAccentColor());
+        secHex.setTypeface(Typeface.DEFAULT_BOLD);
+        secHex.setPadding(0, LocalDownloadsUIState.dp(activity, 14), 0, LocalDownloadsUIState.dp(activity, 8));
+        sheet.addView(secHex);
+
+        addSettingsActionItem(activity, sheet, "🎨 Vurgu Rengi (HEX) Gir", () ->
+                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH,
+                        () -> showHexColorInputDialog(activity, true, fragment)));
+        addSettingsActionItem(activity, sheet, "🖼️ Arka Plan (Fon) Rengi (HEX) Gir", () ->
+                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH,
+                        () -> showHexColorInputDialog(activity, false, fragment)));
+        addSettingsActionItem(activity, sheet, "🔄 HEX Renk Özelleştirmesini Sıfırla", () -> {
+            LocalDownloadsUIState.clearHexOverrides(activity);
+            LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
+            Utils.showToastShort("HEX renkler sıfırlandı");
+        });
 
         // 2. Özel Duvar Kağıdı & Animasyon Profili
         TextView secWall = LocalDownloadsUIState.text(activity, "🖼️ Duvar Kağıdı & Animasyon Stili", 14, LocalDownloadsUIState.activeAccentColor());
@@ -205,8 +187,8 @@ public final class LocalDownloadsDialogs {
         sheet.addView(playerEffectsHeader);
 
         addSettingsActionItem(activity, sheet, "🎬 Gelişmiş Efektler, Animasyonlar & Profiller", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showPlayerEffectsDialog(activity, fragment)));
-
         addSettingsActionItem(activity, sheet, "🎧 Kulaklık Kontrollerini Özelleştir", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showHeadphoneControlsDialog(activity)));
+        addSettingsActionItem(activity, sheet, "🎚️ Ekolayzer, Bass & Hız Kontrolü", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showEqualizerDialog(activity)));
 
         // 3. İndirme, Otomatik Analiz ve Önbellek Yönetimi
         TextView secCache = LocalDownloadsUIState.text(activity, "📦 Akıllı İndirme ve Önbellek Yönetimi", 14, LocalDownloadsUIState.activeAccentColor());
@@ -236,6 +218,11 @@ public final class LocalDownloadsDialogs {
 
         addSettingsActionItem(activity, sheet, "📡 Sık Dinlenenleri Otomatik İndirme Ayarları (" + (autoWifi ? threshold + " Dinleme • " + (wifiOnly ? "Wi-Fi" : "Mobil+Wi-Fi") : "KAPALI") + ")", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showAutoDownloadConfigDialog(activity, fragment)));
 
+        int rateLimit = LocalDownloadsUIState.getRateLimitKbps(activity);
+        String rateLabel = rateLimit <= 0 ? "Sınırsız" : rateLimit + " KB/sn";
+        addSettingsActionItem(activity, sheet, "🚀 İndirme Hız Limiti: " + rateLabel, () ->
+                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showRateLimitDialog(activity)));
+
         TextView swipeNextToggle = LocalDownloadsUIState.text(activity, "➡️ Hassas Sağa Kaydırarak Sıradaki: " + (LocalDownloadsUIState.swipeToPlayNext ? "AÇIK ✓" : "KAPALI"), 14, LocalDownloadsUIState.primaryTextColor());
         swipeNextToggle.setTypeface(Typeface.DEFAULT_BOLD);
         swipeNextToggle.setPadding(LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12));
@@ -252,7 +239,6 @@ public final class LocalDownloadsDialogs {
         sheet.addView(swipeNextToggle, swipeToggleLp);
 
         addSettingsActionItem(activity, sheet, "🎤 Şarkı Sözleri & DeepL Çeviri Merkezi", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showLyricsLibraryDialog(activity, fragment)));
-
         addSettingsActionItem(activity, sheet, "⬇️ İndirme Kuyruğu Yöneticisini Aç (" + LocalDownloadManager.getTotalQueueCount() + ")", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showDownloadManagerDialog(activity, fragment)));
 
         addSettingsActionItem(activity, sheet, "🧹 Görsel & Meta Veri Önbelleğini Temizle (RAM/LruCache)", () -> {
@@ -307,280 +293,234 @@ public final class LocalDownloadsDialogs {
         LocalDownloadsAnimator.animateBottomSheetShow(sheet, overlay, screenH);
     }
 
-    // GÖREV 3: Kapsamlı Faye Özelleştirme Ayarları
-    public static void showPlayer2FayeSettingsDialog(Activity activity, LocalDownloadsFragment fragment) {
+    // ==== YENİ: HEX renk girme diyaloğu ====
+    public static void showHexColorInputDialog(Activity activity, boolean isAccent, LocalDownloadsFragment fragment) {
         if (activity == null) return;
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = LocalDownloadsUIState.dp(activity, 20);
+        box.setPadding(pad, pad, pad, pad);
+        box.setBackground(LocalDownloadsUIState.menuBackground(activity));
 
-        Dialog dialog = new Dialog(activity, android.R.style.Theme_Translucent_NoTitleBar);
-        FrameLayout overlay = new FrameLayout(activity);
-        overlay.setBackgroundColor(Color.argb(150, 0, 0, 0));
-
-        ScrollView scroll = new ScrollView(activity);
-        scroll.setFillViewport(true);
-
-        LinearLayout sheet = new LinearLayout(activity);
-        sheet.setOrientation(LinearLayout.VERTICAL);
-        sheet.setPadding(LocalDownloadsUIState.dp(activity, 20), LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 20), LocalDownloadsUIState.dp(activity, 28));
-        sheet.setBackground(LocalDownloadsUIState.bottomSheetSurfaceDrawable(activity));
-        sheet.setClickable(true);
-
-        int screenH = activity.getResources().getDisplayMetrics().heightPixels;
-        View handle = new View(activity);
-        GradientDrawable handleBg = new GradientDrawable();
-        handleBg.setCornerRadius(LocalDownloadsUIState.dp(activity, 3));
-        handleBg.setColor(Color.argb(90, 255, 255, 255));
-        handle.setBackground(handleBg);
-        LinearLayout.LayoutParams handleLp = new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 42), LocalDownloadsUIState.dp(activity, 4));
-        handleLp.gravity = Gravity.CENTER_HORIZONTAL;
-        handleLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 14));
-        sheet.addView(handle, handleLp);
-
-        LinearLayout topRow = new LinearLayout(activity);
-        topRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView title = LocalDownloadsUIState.text(activity, "✨ Faye Oynatıcı Ayarları", 19, LocalDownloadsUIState.primaryTextColor());
+        TextView title = LocalDownloadsUIState.text(activity,
+                isAccent ? "🎨 Vurgu Rengi (HEX)" : "🖼️ Arka Plan Rengi (HEX)",
+                16, LocalDownloadsUIState.primaryTextColor());
         title.setTypeface(Typeface.DEFAULT_BOLD);
-        topRow.addView(title, new LinearLayout.LayoutParams(0, -2, 1f));
+        box.addView(title);
 
-        ImageButton closeBtn = LocalDownloadsUIState.icon(activity, LocalDownloadsUIState.createVectorIconDrawable(activity, LocalDownloadsUIState.ICON_CLOSE, LocalDownloadsUIState.primaryTextColor(), 0), "Kapat");
-        closeBtn.setOnClickListener(v -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, null));
-        topRow.addView(closeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 36), LocalDownloadsUIState.dp(activity, 36)));
-        sheet.addView(topRow, new LinearLayout.LayoutParams(-1, -2));
+        TextView sub = LocalDownloadsUIState.text(activity,
+                "Örnek: #FF0000, #00FF88, #1B0D2B\nKod girildiğinde renk anında uygulanır.",
+                12, LocalDownloadsUIState.secondary());
+        sub.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 10));
+        box.addView(sub);
 
-        TextView info = LocalDownloadsUIState.text(activity, "Buradaki değişiklikler sadece Faye (Oynatıcı 2) için geçerlidir.", 12, LocalDownloadsUIState.secondary());
-        info.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 12));
-        sheet.addView(info);
+        EditText hexInput = new EditText(activity);
+        hexInput.setHint("#RRGGBB");
+        hexInput.setTextColor(LocalDownloadsUIState.primaryTextColor());
+        hexInput.setHintTextColor(LocalDownloadsUIState.secondary());
+        hexInput.setSingleLine(true);
+        hexInput.setInputType(InputType.TYPE_CLASS_TEXT);
+        box.addView(hexInput, new LinearLayout.LayoutParams(-1, -2));
 
-        // GÖREV 3: Renk Ayarları
-        TextView secColor = LocalDownloadsUIState.text(activity, "🎨 Renkler & Atmosfer", 14, LocalDownloadsUIState.activeAccentColor());
-        secColor.setTypeface(Typeface.DEFAULT_BOLD);
-        secColor.setPadding(0, 0, 0, LocalDownloadsUIState.dp(activity, 8));
-        sheet.addView(secColor);
+        LinearLayout actions = new LinearLayout(activity);
+        actions.setGravity(Gravity.END);
+        actions.setPadding(0, LocalDownloadsUIState.dp(activity, 12), 0, 0);
+        TextView cancelBtn = LocalDownloadsUIState.createPillButton(activity, "İptal", false);
+        TextView saveBtn = LocalDownloadsUIState.createPillButton(activity, "Uygula", true);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(-2, -2);
+        sLp.setMargins(LocalDownloadsUIState.dp(activity, 8), 0, 0, 0);
+        saveBtn.setLayoutParams(sLp);
+        actions.addView(cancelBtn);
+        actions.addView(saveBtn);
+        box.addView(actions, new LinearLayout.LayoutParams(-1, -2));
 
-        addColorPickerRow(activity, sheet, "Arka Plan Rengi (Üst)", LocalDownloadsUIState.currentTheme.varBgTop, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 0);
-            LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
+        AlertDialog dialog = new AlertDialog.Builder(activity).setView(box).create();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+
+        cancelBtn.setOnClickListener(v -> dialog.dismiss());
+        saveBtn.setOnClickListener(v -> {
+            String hex = hexInput.getText().toString().trim();
+            if (!hex.startsWith("#")) hex = "#" + hex;
+            try {
+                Color.parseColor(hex);
+                if (isAccent) LocalDownloadsUIState.saveHexAccent(activity, hex);
+                else LocalDownloadsUIState.saveHexBackground(activity, hex);
+                LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
+                Utils.showToastShort("Renk uygulandı: " + hex);
+                dialog.dismiss();
+            } catch (Exception e) {
+                Utils.showToastShort("Geçersiz HEX kodu. Örnek: #FF0000");
+            }
         });
-        addColorPickerRow(activity, sheet, "Ana Vurgu Rengi (Mor)", LocalDownloadsUIState.currentTheme.varAccentPrimary, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 1);
-            LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
-        });
-        addColorPickerRow(activity, sheet, "İkincil Vurgu Rengi (Sarı/Altın)", LocalDownloadsUIState.currentTheme.varAccentSecondary, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 2);
-            LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
-        });
-
-        // GÖREV 3: Kapak ve Arka Plan Efektleri
-        TextView secEffects = LocalDownloadsUIState.text(activity, "🖼️ Kapak & Arka Plan Efektleri", 14, LocalDownloadsUIState.activeAccentColor());
-        secEffects.setTypeface(Typeface.DEFAULT_BOLD);
-        secEffects.setPadding(0, LocalDownloadsUIState.dp(activity, 16), 0, LocalDownloadsUIState.dp(activity, 8));
-        sheet.addView(secEffects);
-
-        addEffectIntensitySliderRow(activity, sheet, "Arka Plan Bulanıklık Yoğunluğu:", LocalDownloadsUIState.getGradientVibrancy(activity), 0.1f, 2.0f, val -> {
-            LocalDownloadsUIState.setGradientVibrancy(activity, val);
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-        });
-
-        addEffectToggleRow(activity, sheet, "Kapak Nefes Alma Animasyonu", LocalDownloadsUIState.isPlayerCoverBreathingEnabled(activity), newVal -> {
-            activity.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE).edit().putBoolean("player_cover_breathing", newVal).apply();
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-        });
-
-        addEffectToggleRow(activity, sheet, "Kapak Çevresinde Işık Halesi (Halo)", LocalDownloadsUIState.isHaloEnabled(activity), newVal -> {
-            LocalDownloadsUIState.setHaloEnabled(activity, newVal);
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-        });
-
-        // GÖREV 3: Animasyonlar
-        TextView secAnim = LocalDownloadsUIState.text(activity, "🎬 Animasyon Hızı & Yoğunluğu", 14, LocalDownloadsUIState.activeAccentColor());
-        secAnim.setTypeface(Typeface.DEFAULT_BOLD);
-        secAnim.setPadding(0, LocalDownloadsUIState.dp(activity, 16), 0, LocalDownloadsUIState.dp(activity, 8));
-        sheet.addView(secAnim);
-
-        addEffectSliderRow(activity, sheet, "Hareket Hızı:", LocalDownloadsUIState.getAnimationSpeedScale(activity), LocalDownloadsUIState.MIN_ANIMATION_SPEED, LocalDownloadsUIState.MAX_ANIMATION_SPEED, newVal -> {
-            LocalDownloadsUIState.setAnimationSpeedScale(activity, newVal);
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-        });
-
-        addEffectIntensitySliderRow(activity, sheet, "Efekt Parlaklığı:", LocalDownloadsUIState.getAnimationIntensity(activity), LocalDownloadsUIState.MIN_ANIMATION_INTENSITY, LocalDownloadsUIState.MAX_ANIMATION_INTENSITY, newVal -> {
-            LocalDownloadsUIState.setAnimationIntensity(activity, newVal);
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-        });
-
-        // Sıfırla Butonu
-        TextView resetBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Varsayılan Faye Ayarlarına Dön", false);
-        resetBtn.setOnClickListener(v -> {
-            // Enum sabiti mutasyonla üretildiği için önce fabrika değerlerine döndür,
-            // sonra prefs'teki özel renk anahtarlarını sil. Aksi hâlde uygulama yeniden
-            // başladığında eski renkler geri yüklenirdi.
-            LocalDownloadsUIState.ThemePalette.resetFayeDefaults();
-            LocalDownloadsUIState.clearFayeCustomColors(activity);
-            LocalDownloadsUIState.currentTheme = LocalDownloadsUIState.ThemePalette.FAYE;
-            LocalDownloadsUIState.savePreferences(activity);
-            activity.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE).edit()
-                    .putBoolean("player_cover_breathing", true)
-                    .putBoolean(LocalDownloadsUIState.PREF_HALO_ENABLED_KEY, true)
-                    .putFloat(LocalDownloadsUIState.PREF_ANIMATION_SPEED_KEY, LocalDownloadsUIState.DEFAULT_ANIMATION_SPEED)
-                    .putFloat(LocalDownloadsUIState.PREF_ANIMATION_INTENSITY_KEY, LocalDownloadsUIState.DEFAULT_ANIMATION_INTENSITY)
-                    .apply();
-            LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
-            LocalDownloadsPlayer.updateDynamicPlayerColors(activity);
-            Utils.showToastShort("Faye ayarları varsayılana döndürüldü");
-            dialog.dismiss();
-        });
-        LinearLayout.LayoutParams resLp = new LinearLayout.LayoutParams(-1, -2);
-        resLp.setMargins(0, LocalDownloadsUIState.dp(activity, 16), 0, 0);
-        resetBtn.setLayoutParams(resLp);
-        sheet.addView(resetBtn);
-
-        scroll.addView(sheet);
-        overlay.addView(scroll, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
-        overlay.setOnClickListener(v -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, null));
-
-        dialog.setContentView(overlay);
-        if (dialog.getWindow() != null) {
-            dialog.getWindow().setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT);
-            OfflineHeaderBlocker.applyImmersiveFullscreen(dialog.getWindow(), true);
-        }
         dialog.show();
-        LocalDownloadsAnimator.animateBottomSheetShow(sheet, overlay, screenH);
     }
 
-    /**
-     * Faye paletinin bir rengini runtime'da değiştirir.
-     *
-     * <p><b>ÖNEMLİ:</b> {@code ThemePalette} bir enum olduğu için {@code new ThemePalette(...)}
-     * çağrısı derleme hatası verir ("enum classes may not be instantiated"). Bu yüzden
-     * renk güncellemesi enum sabitinin <i>alanlarını mutasyona uğratarak</i> yapılır. Değişiklik
-     * {@link LocalDownloadsUIState#saveFayeCustomColor} üzerinden SharedPreferences'a yazılır
-     * ve uygulama yeniden başlatıldığında geri yüklenir.</p>
-     *
-     * @param type 0 = bgTop, 1 = accentPrimary, 2 = accentSecondary
-     */
-    private static LocalDownloadsUIState.ThemePalette changeThemeColor(
-            Context ctx, LocalDownloadsUIState.ThemePalette theme, int newColor, int type) {
-        if (theme == null) theme = LocalDownloadsUIState.ThemePalette.FAYE;
-        LocalDownloadsUIState.saveFayeCustomColor(ctx, type, newColor);
-        return theme;
-    }
+    // ==== YENİ: Ekolayzer + Bass + Hız diyaloğu ====
+    public static void showEqualizerDialog(Activity activity) {
+        if (activity == null) return;
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = LocalDownloadsUIState.dp(activity, 20);
+        box.setPadding(pad, pad, pad, pad);
+        box.setBackground(LocalDownloadsUIState.bottomSheetSurfaceDrawable(activity));
 
-    private interface ColorPickListener { void onPicked(int color); }
+        TextView title = LocalDownloadsUIState.text(activity, "🎚️ Ekolayzer & Bass & Hız", 17, LocalDownloadsUIState.primaryTextColor());
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
 
-    private static void addColorPickerRow(Context ctx, LinearLayout parent, String label, int currentColor, ColorPickListener listener) {
-        LinearLayout row = new LinearLayout(ctx);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
-        row.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), false));
+        TextView info = LocalDownloadsUIState.text(activity, "Değişiklikler çalan şarkıya anında uygulanır.", 12, LocalDownloadsUIState.secondary());
+        info.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 12));
+        box.addView(info);
+
+        final boolean[] eq = {LocalDownloadsUIState.isEqEnabled(activity)};
+        final boolean[] bass = {LocalDownloadsUIState.isBassBoostEnabled(activity)};
+        final int[] bassStr = {LocalDownloadsUIState.getBassBoostStrength(activity)};
+        final float[] speed = {LocalDownloadsUIState.getPlaybackSpeed(activity)};
+
+        TextView eqToggle = LocalDownloadsUIState.text(activity, "Ekolayzer: " + (eq[0] ? "AÇIK ✓" : "KAPALI"), 14, LocalDownloadsUIState.primaryTextColor());
+        eqToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        eqToggle.setPadding(LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12));
+        eqToggle.setBackground(LocalDownloadsUIState.glassCardDrawable(activity, LocalDownloadsUIState.dp(activity, 10), eq[0]));
+        eqToggle.setOnClickListener(v -> {
+            eq[0] = !eq[0];
+            LocalDownloadsUIState.setEqEnabled(activity, eq[0]);
+            eqToggle.setText("Ekolayzer: " + (eq[0] ? "AÇIK ✓" : "KAPALI"));
+            eqToggle.setBackground(LocalDownloadsUIState.glassCardDrawable(activity, LocalDownloadsUIState.dp(activity, 10), eq[0]));
+            OfflinePlaybackService.refreshEqualizerSettings(activity);
+        });
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
-        row.setLayoutParams(lp);
+        lp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 8));
+        box.addView(eqToggle, lp);
 
-        TextView tv = LocalDownloadsUIState.text(ctx, label, 14, LocalDownloadsUIState.primaryTextColor());
-        tv.setTypeface(Typeface.DEFAULT_BOLD);
-        row.addView(tv, new LinearLayout.LayoutParams(0, -2, 1f));
-
-        View swatch = new View(ctx);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setShape(GradientDrawable.OVAL);
-        bg.setColor(currentColor);
-        bg.setStroke(LocalDownloadsUIState.dp(ctx, 1), LocalDownloadsUIState.primaryTextColor());
-        swatch.setBackground(bg);
-        row.addView(swatch, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(ctx, 24), LocalDownloadsUIState.dp(ctx, 24)));
-
-        row.setOnClickListener(v -> {
-            // Renk paletini göster (basit bir menü ile)
-            int[] palette = {Color.parseColor("#C77DFF"), Color.parseColor("#FFD166"), Color.parseColor("#FF2A70"), Color.parseColor("#10B981"), Color.parseColor("#3B82F6"), Color.parseColor("#F43F5E"), Color.parseColor("#A855F7"), Color.parseColor("#1B0D2B")};
-            String[] names = {"Mor", "Sarı", "Pembe", "Zümrüt", "Mavi", "Kızıl", "Ametist", "Koyu Mor"};
-            LocalDownloadsUIState.showMenu(ctx, row, names, -1, pos -> {
-                listener.onPicked(palette[pos]);
-                GradientDrawable newBg = new GradientDrawable();
-                newBg.setShape(GradientDrawable.OVAL);
-                newBg.setColor(palette[pos]);
-                newBg.setStroke(LocalDownloadsUIState.dp(ctx, 1), LocalDownloadsUIState.primaryTextColor());
-                swatch.setBackground(newBg);
-            });
+        TextView bassToggle = LocalDownloadsUIState.text(activity, "Bass Boost: " + (bass[0] ? "AÇIK ✓" : "KAPALI"), 14, LocalDownloadsUIState.primaryTextColor());
+        bassToggle.setTypeface(Typeface.DEFAULT_BOLD);
+        bassToggle.setPadding(LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 14), LocalDownloadsUIState.dp(activity, 12));
+        bassToggle.setBackground(LocalDownloadsUIState.glassCardDrawable(activity, LocalDownloadsUIState.dp(activity, 10), bass[0]));
+        bassToggle.setOnClickListener(v -> {
+            bass[0] = !bass[0];
+            LocalDownloadsUIState.setBassBoostEnabled(activity, bass[0]);
+            bassToggle.setText("Bass Boost: " + (bass[0] ? "AÇIK ✓" : "KAPALI"));
+            bassToggle.setBackground(LocalDownloadsUIState.glassCardDrawable(activity, LocalDownloadsUIState.dp(activity, 10), bass[0]));
+            OfflinePlaybackService.refreshEqualizerSettings(activity);
         });
-        parent.addView(row);
-    }
+        box.addView(bassToggle, lp);
 
-    private interface EffectToggleListener { void onChanged(boolean newValue); }
-    private static void addEffectToggleRow(Context ctx, LinearLayout parent, String label, boolean initial, EffectToggleListener listener) {
-        final boolean[] state = {initial};
-        TextView row = LocalDownloadsUIState.text(ctx, label + ": " + (initial ? "AÇIK ✓" : "KAPALI"), 14, LocalDownloadsUIState.primaryTextColor());
-        row.setTypeface(Typeface.DEFAULT_BOLD);
-        row.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
-        row.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), initial));
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-        lp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
-        row.setLayoutParams(lp);
-        row.setOnClickListener(v -> {
-            state[0] = !state[0];
-            row.setText(label + ": " + (state[0] ? "AÇIK ✓" : "KAPALI"));
-            row.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), state[0]));
-            if (listener != null) listener.onChanged(state[0]);
-        });
-        parent.addView(row);
-    }
-
-    private interface EffectSliderListener { void onChanged(float value); }
-    private static void addEffectSliderRow(Context ctx, LinearLayout parent, String labelPrefix, float currentValue, float min, float max, EffectSliderListener listener) {
-        LinearLayout wrapper = new LinearLayout(ctx);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 10), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
-        wrapper.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), false));
-        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(-1, -2);
-        wLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
-        wrapper.setLayoutParams(wLp);
-
-        final float[] value = {currentValue};
-        TextView label = LocalDownloadsUIState.text(ctx, labelPrefix + String.format(Locale.ROOT, " %.2f×", currentValue), 13, LocalDownloadsUIState.primaryTextColor());
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        wrapper.addView(label, new LinearLayout.LayoutParams(-1, -2));
-
-        SeekBar slider = new SeekBar(ctx);
-        slider.setMax(100);
-        slider.setProgress(Math.round(((currentValue - min) / (max - min)) * 100f));
-        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                float t = progress / 100f;
-                value[0] = min + t * (max - min);
-                label.setText(labelPrefix + String.format(Locale.ROOT, " %.2f×", value[0]));
+        TextView bassLabel = LocalDownloadsUIState.text(activity, "Bass Yoğunluğu: " + bassStr[0] + " / 1000", 13, LocalDownloadsUIState.secondary());
+        bassLabel.setPadding(0, LocalDownloadsUIState.dp(activity, 6), 0, 0);
+        box.addView(bassLabel);
+        SeekBar bassBar = new SeekBar(activity);
+        bassBar.setMax(1000);
+        bassBar.setProgress(bassStr[0]);
+        bassBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
+                bassStr[0] = p;
+                bassLabel.setText("Bass Yoğunluğu: " + p + " / 1000");
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { if (listener != null) listener.onChanged(value[0]); }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {
+                LocalDownloadsUIState.setBassBoostStrength(activity, bassStr[0]);
+                OfflinePlaybackService.refreshEqualizerSettings(activity);
+            }
         });
-        wrapper.addView(slider, new LinearLayout.LayoutParams(-1, -2));
-        parent.addView(wrapper);
+        box.addView(bassBar, new LinearLayout.LayoutParams(-1, -2));
+
+        TextView speedLabel = LocalDownloadsUIState.text(activity,
+                "Oynatma Hızı: " + String.format(Locale.ROOT, "%.2f×", speed[0]),
+                13, LocalDownloadsUIState.secondary());
+        speedLabel.setPadding(0, LocalDownloadsUIState.dp(activity, 10), 0, 0);
+        box.addView(speedLabel);
+        SeekBar speedBar = new SeekBar(activity);
+        speedBar.setMax(150);
+        speedBar.setProgress(Math.round((speed[0] - 0.5f) / 1.5f * 150f));
+        speedBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
+                speed[0] = 0.5f + p / 150f * 1.5f;
+                speedLabel.setText("Oynatma Hızı: " + String.format(Locale.ROOT, "%.2f×", speed[0]));
+            }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {
+                LocalDownloadsUIState.setPlaybackSpeed(activity, speed[0]);
+                OfflinePlaybackService.applyPlaybackSpeed(activity);
+            }
+        });
+        box.addView(speedBar, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout bottomRow = new LinearLayout(activity);
+        bottomRow.setGravity(Gravity.END);
+        bottomRow.setPadding(0, LocalDownloadsUIState.dp(activity, 12), 0, 0);
+        TextView closeBtn = LocalDownloadsUIState.createPillButton(activity, "Kapat", false);
+        closeBtn.setOnClickListener(v -> {
+            try {
+                AlertDialog d = (AlertDialog) closeBtn.getTag();
+                if (d != null) d.dismiss();
+            } catch (Exception ignored) {}
+        });
+        bottomRow.addView(closeBtn);
+        box.addView(bottomRow);
+
+        AlertDialog dialog = new AlertDialog.Builder(activity).setView(box).create();
+        closeBtn.setTag(dialog);
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        dialog.show();
     }
 
-    private static void addEffectIntensitySliderRow(Context ctx, LinearLayout parent, String labelPrefix, float currentValue, float min, float max, EffectSliderListener listener) {
-        LinearLayout wrapper = new LinearLayout(ctx);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-        wrapper.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 10), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
-        wrapper.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), false));
-        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(-1, -2);
-        wLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
-        wrapper.setLayoutParams(wLp);
+    // ==== YENİ: İndirme hız limiti diyaloğu ====
+    public static void showRateLimitDialog(Activity activity) {
+        if (activity == null) return;
+        LinearLayout box = new LinearLayout(activity);
+        box.setOrientation(LinearLayout.VERTICAL);
+        int pad = LocalDownloadsUIState.dp(activity, 20);
+        box.setPadding(pad, pad, pad, pad);
+        box.setBackground(LocalDownloadsUIState.menuBackground(activity));
 
-        final float[] value = {currentValue};
-        TextView label = LocalDownloadsUIState.text(ctx, labelPrefix + String.format(Locale.ROOT, " %d%%", Math.round(currentValue * 100f)), 13, LocalDownloadsUIState.primaryTextColor());
-        label.setTypeface(Typeface.DEFAULT_BOLD);
-        wrapper.addView(label, new LinearLayout.LayoutParams(-1, -2));
+        TextView title = LocalDownloadsUIState.text(activity, "🚀 İndirme Hız Limiti", 16, LocalDownloadsUIState.primaryTextColor());
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
 
-        SeekBar slider = new SeekBar(ctx);
-        slider.setMax(100);
-        slider.setProgress(Math.round(((currentValue - min) / (max - min)) * 100f));
-        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                float t = progress / 100f;
-                value[0] = min + t * (max - min);
-                label.setText(labelPrefix + String.format(Locale.ROOT, " %d%%", Math.round(value[0] * 100f)));
+        TextView sub = LocalDownloadsUIState.text(activity, "0 = sınırsız. Örn: 1024 = 1 MB/sn.", 12, LocalDownloadsUIState.secondary());
+        sub.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 10));
+        box.addView(sub);
+
+        final int[] current = {LocalDownloadsUIState.getRateLimitKbps(activity)};
+        TextView valueLabel = LocalDownloadsUIState.text(activity,
+                current[0] <= 0 ? "Sınırsız" : current[0] + " KB/sn",
+                14, LocalDownloadsUIState.primaryTextColor());
+        valueLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(valueLabel);
+
+        SeekBar bar = new SeekBar(activity);
+        bar.setMax(5000);
+        bar.setProgress(Math.min(5000, current[0]));
+        bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar s, int p, boolean u) {
+                current[0] = p;
+                valueLabel.setText(p <= 0 ? "Sınırsız" : p + " KB/sn");
             }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
-            @Override public void onStopTrackingTouch(SeekBar seekBar) { if (listener != null) listener.onChanged(value[0]); }
+            @Override public void onStartTrackingTouch(SeekBar s) {}
+            @Override public void onStopTrackingTouch(SeekBar s) {}
         });
-        wrapper.addView(slider, new LinearLayout.LayoutParams(-1, -2));
-        parent.addView(wrapper);
+        box.addView(bar, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout actions = new LinearLayout(activity);
+        actions.setGravity(Gravity.END);
+        TextView cancelBtn = LocalDownloadsUIState.createPillButton(activity, "İptal", false);
+        TextView saveBtn = LocalDownloadsUIState.createPillButton(activity, "Kaydet", true);
+        LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(-2, -2);
+        sLp.setMargins(LocalDownloadsUIState.dp(activity, 8), 0, 0, 0);
+        saveBtn.setLayoutParams(sLp);
+        actions.addView(cancelBtn);
+        actions.addView(saveBtn);
+        box.addView(actions, new LinearLayout.LayoutParams(-1, -2));
+
+        AlertDialog dialog = new AlertDialog.Builder(activity).setView(box).create();
+        if (dialog.getWindow() != null) dialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        cancelBtn.setOnClickListener(v -> dialog.dismiss());
+        saveBtn.setOnClickListener(v -> {
+            LocalDownloadsUIState.setRateLimitKbps(activity, current[0]);
+            dialog.dismiss();
+            Utils.showToastShort(current[0] <= 0 ? "Hız limiti kaldırıldı" : "Hız limiti: " + current[0] + " KB/sn");
+        });
+        dialog.show();
     }
 
     private static void addSettingsActionItem(Context ctx, LinearLayout parent, String label, Runnable onClick) {
@@ -638,7 +578,10 @@ public final class LocalDownloadsDialogs {
             });
         }
         new AlertDialog.Builder(activity).setView(box).setPositiveButton("Tamam", null)
-                .setNeutralButton("Varsayılanlar", (d, which) -> prefs.edit().putString("headset_single_action", "TOGGLE").putString("headset_double_action", "NEXT").putString("headset_long_action", "PREVIOUS").apply())
+                .setNeutralButton("Varsayılanlar", (d, which) -> prefs.edit()
+                        .putString("headset_single_action", "TOGGLE")
+                        .putString("headset_double_action", "NEXT")
+                        .putString("headset_long_action", "PREVIOUS").apply())
                 .show();
     }
 
@@ -959,7 +902,6 @@ public final class LocalDownloadsDialogs {
     }
 
     public static void showLyricsLibraryDialog(Activity activity, LocalDownloadsFragment fragment) {
-        // Şarkı sözü merkezi önceki versiyondaki gibi çalışmaya devam eder.
         if (activity == null || fragment == null) return;
         File musicRoot = fragment.getMusicRoot();
         LocalDownloadManager.purgeCorruptedLyrics(musicRoot);
@@ -1055,7 +997,10 @@ public final class LocalDownloadsDialogs {
                 if (!filterText[0].isEmpty() && !track.displayTitle().toLowerCase(Locale.ROOT).contains(filterText[0]) && !track.displayArtist().toLowerCase(Locale.ROOT).contains(filterText[0])) continue;
 
                 boolean unavailable = prefs.getBoolean("lyrics_lookup_failed_" + track.videoId(), false);
-                String state = isNativeTr ? "📖 Türkçe Şiir / Orijinal Söz Hazır (Çevirisiz)" : (hasTr ? "✓ Orijinal + Türkçe Çeviri Hazır (DeepL)" : (hasLrc ? "◐ Söz var · Türkçe çeviri yok" : (unavailable ? "— Tam eşleşme bulunamadı (Elle aramak için dokun)" : "○ Henüz indirilmedi")));
+                String state = isNativeTr ? "📖 Türkçe Şiir / Orijinal Söz Hazır (Çevirisiz)"
+                        : (hasTr ? "✓ Orijinal + Türkçe Çeviri Hazır (DeepL)"
+                        : (hasLrc ? "◐ Söz var · Türkçe çeviri yok"
+                        : (unavailable ? "— Tam eşleşme bulunamadı (Elle aramak için dokun)" : "○ Henüz indirilmedi")));
 
                 LinearLayout row = new LinearLayout(activity);
                 row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1074,7 +1019,8 @@ public final class LocalDownloadsDialogs {
                 name.setEllipsize(TextUtils.TruncateAt.END);
                 col.addView(name);
 
-                TextView status = LocalDownloadsUIState.text(activity, state, 11, hasTr ? LocalDownloadsUIState.activeSecondaryAccent() : LocalDownloadsUIState.secondary());
+                TextView status = LocalDownloadsUIState.text(activity, state, 11,
+                        hasTr ? LocalDownloadsUIState.activeSecondaryAccent() : LocalDownloadsUIState.secondary());
                 status.setPadding(0, LocalDownloadsUIState.dp(activity, 2), 0, 0);
                 col.addView(status);
                 row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -1159,7 +1105,6 @@ public final class LocalDownloadsDialogs {
                     final int currentIdx = i + 1;
                     Utils.runOnMainThread(() -> { if (dialog.isShowing()) fetch.setText("Taranıyor (" + currentIdx + "/" + total + ")…"); });
                     if (LocalDownloadManager.hasTurkishTranslation(musicRoot, track.videoId())) continue;
-
                     boolean found = false;
                     try { found = LocalDownloadManager.fetchAndSaveSyncedLyricsCustom(musicRoot, track.videoId(), track.displayTitle(), track.displayArtist(), track.durationSeconds(), chosenSource, chosenEngine, deeplKey, false); } catch (Exception ignored) {}
                     if (found) foundCount++; else prefs.edit().putBoolean("lyrics_lookup_failed_" + track.videoId(), true).apply();
@@ -1511,10 +1456,8 @@ public final class LocalDownloadsDialogs {
             String newTitle = titleInput.getText().toString().trim();
             String newArtist = artistInput.getText().toString().trim();
             String newAlbum = albumInput.getText().toString().trim();
-
             if (newTitle.isEmpty()) { Utils.showToastShort("Şarkı adı boş olamaz"); return; }
             boolean success = track.updateMetadata(musicRoot, newTitle, newArtist, newAlbum);
-
             if (success) {
                 LocalDownloadsUIState.TRACK_CACHE.clear();
                 LocalDownloadsUIState.diskReloadNeeded = true;
@@ -1626,6 +1569,7 @@ public final class LocalDownloadsDialogs {
         addBottomSheetListRow(activity, sheet, "▶", "Şimdi oynat (Tam Ekran)", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> { LocalDownloadsPlayer.play(activity, track); fragment.showFullScreenPlayer(); }));
         addBottomSheetListRow(activity, sheet, "🎶", "Sıraya ekle", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> LocalDownloadsPlayer.insertTrackIntoLiveQueue(activity, track, false)));
         addBottomSheetListRow(activity, sheet, "🎤", "Şarkı sözlerini / Şiiri göster (LRC)", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> { if (!LocalDownloadsUIState.playingPath.equals(track.audioFile().getAbsolutePath())) LocalDownloadsPlayer.play(activity, track); LocalDownloadsPlayer.showSyncedLyricsDialog(activity, fragment); }));
+        addBottomSheetListRow(activity, sheet, "🎚️", "Ekolayzer & Hız Kontrolü", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showEqualizerDialog(activity)));
         addBottomSheetListRow(activity, sheet, "💾", "Sözleri Dışa Aktar (.lrc)", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> {
             File lrcFile = new File(musicRoot, track.videoId() + ".lrc");
             if (!lrcFile.exists()) { Utils.showToastShort("Dışa aktarılacak söz dosyası bulunamadı"); return; }
@@ -1874,17 +1818,14 @@ public final class LocalDownloadsDialogs {
             String name = nameInput.getText().toString().trim();
             String remoteInput = urlInput.getText().toString().trim();
             if (name.isEmpty()) { Utils.showToastShort("Lütfen bir liste adı girin"); return; }
-
             int startIdx = parsePositiveInt(startInput.getText().toString(), 1);
             int endIdx = parsePositiveInt(endInput.getText().toString(), 0);
-
             OfflineStorage.createPlaylist(musicRoot, name, remoteInput);
             if (trackToAdd != null) OfflineStorage.addTrackToPlaylist(musicRoot, name, trackToAdd.videoId());
             LocalDownloadsUIState.selectedPlaylist = name;
             LocalDownloadsUIState.showingArtists = false;
             LocalDownloadsUIState.showingPlaylistsOverview = false;
             LocalDownloadsUIState.diskReloadNeeded = true;
-
             if (!remoteInput.isEmpty()) {
                 LocalDownloadManager.fetchAndDownloadPlaylist(musicRoot, name, remoteInput, startIdx, endIdx);
             } else if (existingPlaylist != null) {
@@ -1995,6 +1936,58 @@ public final class LocalDownloadsDialogs {
         } catch (Exception ignored) { return fallback; }
     }
 
+    private static void addEffectToggleRow(Context ctx, LinearLayout parent, String label, boolean initial, ToggleListener listener) {
+        final boolean[] state = {initial};
+        TextView row = LocalDownloadsUIState.text(ctx, label + ": " + (initial ? "AÇIK ✓" : "KAPALI"), 14, LocalDownloadsUIState.primaryTextColor());
+        row.setTypeface(Typeface.DEFAULT_BOLD);
+        row.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
+        row.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), initial));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
+        row.setLayoutParams(lp);
+        row.setOnClickListener(v -> {
+            state[0] = !state[0];
+            row.setText(label + ": " + (state[0] ? "AÇIK ✓" : "KAPALI"));
+            row.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), state[0]));
+            if (listener != null) listener.onChanged(state[0]);
+        });
+        parent.addView(row);
+    }
+
+    private interface ToggleListener { void onChanged(boolean newValue); }
+
+    private static void addEffectIntensitySliderRow(Context ctx, LinearLayout parent, String labelPrefix, float currentValue, float min, float max, SliderListener listener) {
+        LinearLayout wrapper = new LinearLayout(ctx);
+        wrapper.setOrientation(LinearLayout.VERTICAL);
+        wrapper.setPadding(LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 10), LocalDownloadsUIState.dp(ctx, 14), LocalDownloadsUIState.dp(ctx, 12));
+        wrapper.setBackground(LocalDownloadsUIState.glassCardDrawable(ctx, LocalDownloadsUIState.dp(ctx, 10), false));
+        LinearLayout.LayoutParams wLp = new LinearLayout.LayoutParams(-1, -2);
+        wLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(ctx, 6));
+        wrapper.setLayoutParams(wLp);
+
+        final float[] value = {currentValue};
+        TextView label = LocalDownloadsUIState.text(ctx, labelPrefix + String.format(Locale.ROOT, " %d%%", Math.round(currentValue * 100f)), 13, LocalDownloadsUIState.primaryTextColor());
+        label.setTypeface(Typeface.DEFAULT_BOLD);
+        wrapper.addView(label, new LinearLayout.LayoutParams(-1, -2));
+
+        SeekBar slider = new SeekBar(ctx);
+        slider.setMax(100);
+        slider.setProgress(Math.round(((currentValue - min) / (max - min)) * 100f));
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                float t = progress / 100f;
+                value[0] = min + t * (max - min);
+                label.setText(labelPrefix + String.format(Locale.ROOT, " %d%%", Math.round(value[0] * 100f)));
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) { if (listener != null) listener.onChanged(value[0]); }
+        });
+        wrapper.addView(slider, new LinearLayout.LayoutParams(-1, -2));
+        parent.addView(wrapper);
+    }
+
+    private interface SliderListener { void onChanged(float value); }
+
     public static void showPlayerEffectsDialog(Activity activity, LocalDownloadsFragment fragment) {
         if (activity == null) return;
 
@@ -2034,7 +2027,7 @@ public final class LocalDownloadsDialogs {
         topRow.addView(closeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 36), LocalDownloadsUIState.dp(activity, 36)));
         sheet.addView(topRow, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView info = LocalDownloadsUIState.text(activity, "Normal Oynatıcı ve Faye (Oynatıcı 2) için ortak gelişmiş efektler.", 12, LocalDownloadsUIState.secondary());
+        TextView info = LocalDownloadsUIState.text(activity, "Tam ekran oynatıcı için gelişmiş efektler.", 12, LocalDownloadsUIState.secondary());
         info.setPadding(0, LocalDownloadsUIState.dp(activity, 4), 0, LocalDownloadsUIState.dp(activity, 12));
         sheet.addView(info);
 

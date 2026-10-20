@@ -157,6 +157,23 @@ public final class LocalDownloadsHeader {
         });
     }
 
+    /**
+     * Alt navigasyon çubuğu — Sanatçılar sekmesi kaldırıldı.
+     *
+     * <p>Eskiden 5 sekme vardı (Ana Sayfa, Ara, Kitaplık, Sanatçılar, Ayarlar).
+     * "Sanatçılar" sekmesi, {@code showingArtists} bayrağını {@code true} yapan
+     * tek yerdi. Sekme kaldırıldığından bayrak artık hiçbir zaman {@code true}
+     * olamaz; bu da sanatçı rafı kodunun (renderArtistsSection, createArtistCard,
+     * createArtistHeader) ölü ama zararsız kalması anlamına gelir.</p>
+     *
+     * <p>Yeni düzen (4 sekme):</p>
+     * <ul>
+     *   <li>0 → Ana Sayfa (çevrimdışı moddan çıkar)</li>
+     *   <li>1 → Ara</li>
+     *   <li>2 → Kitaplık</li>
+     *   <li>3 → Ayarlar</li>
+     * </ul>
+     */
     public static View createBottomNavigationBar(Context ctx, LocalDownloadsFragment fragment) {
         LinearLayout nav = new LinearLayout(ctx);
         nav.setOrientation(LinearLayout.HORIZONTAL);
@@ -167,12 +184,14 @@ public final class LocalDownloadsHeader {
         BOTTOM_TAB_ICONS.clear();
         BOTTOM_TAB_LABELS.clear();
 
-        String[] labels = {"Ana Sayfa", "Ara", "Kitaplık", "Sanatçılar", "Ayarlar"};
-        String[] icons = {"🏠", "🔍", "📚", "🎤", "⚙️"};
+        // Sanatçılar sekmesi kaldırıldı → 4 sekme
+        String[] labels = {"Ana Sayfa", "Ara", "Kitaplık", "Ayarlar"};
+        String[] icons = {"🏠", "🔍", "📚", "⚙️"};
 
         for (int i = 0; i < labels.length; i++) {
             final int tabIndex = i;
-            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists) || (i == 3 && LocalDownloadsUIState.showingArtists);
+            // Kitaplık = index 2, artık tek aktif durum bu.
+            boolean active = (i == 2);
 
             LinearLayout tab = new LinearLayout(ctx);
             tab.setOrientation(LinearLayout.VERTICAL);
@@ -200,6 +219,7 @@ public final class LocalDownloadsHeader {
                 } else if (tabIndex == 1) {
                     LocalDownloadsUIState.toggleSearch(ctx);
                 } else if (tabIndex == 2) {
+                    // Kitaplık
                     LocalDownloadsUIState.showingArtists = false;
                     LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
                     LocalDownloadsUIState.selectedPlaylist = null;
@@ -209,21 +229,8 @@ public final class LocalDownloadsHeader {
                     LocalDownloadsUIState.animateNextSongList = true;
                     fragment.showTracks();
                     refreshBottomNavigationTheme(ctx);
-                } else if (tabIndex == 3) {
-                    LocalDownloadsUIState.showingArtists = true;
-                    LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
-                    LocalDownloadsUIState.selectedPlaylist = null;
-                    LocalDownloadsUIState.selectedArtist = null;
-                    LocalDownloadsUIState.showingPlaylistsOverview = false;
-                    LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL;
-                    LocalDownloadsUIState.query = "";
-                    if (LocalDownloadsUIState.searchBar != null) LocalDownloadsUIState.searchBar.setText("");
-                    LocalDownloadsUIState.diskReloadNeeded = true;
-                    LocalDownloadsUIState.TRACK_CACHE.clear();
-                    LocalDownloadsUIState.animateNextSongList = true;
-                    fragment.showTracks();
-                    refreshBottomNavigationTheme(ctx);
                 } else {
+                    // Ayarlar (eski index 4 idi, artık 3)
                     fragment.showSettingsDialog();
                 }
             });
@@ -236,8 +243,9 @@ public final class LocalDownloadsHeader {
         if (LocalDownloadsUIState.bottomNavLayout != null) {
             LocalDownloadsAnimator.animateBackgroundColorChange(LocalDownloadsUIState.bottomNavLayout, LocalDownloadsUIState.currentTheme.varBgBottom);
         }
+        // 4 sekme: sadece index 2 (Kitaplık) aktif durumda olabilir
         for (int i = 0; i < BOTTOM_TAB_ICONS.size() && i < BOTTOM_TAB_LABELS.size(); i++) {
-            boolean active = (i == 2 && !LocalDownloadsUIState.showingArtists) || (i == 3 && LocalDownloadsUIState.showingArtists);
+            boolean active = (i == 2);
             BOTTOM_TAB_ICONS.get(i).setTextColor(active ? LocalDownloadsUIState.activeAccentColor() : LocalDownloadsUIState.secondary());
             BOTTOM_TAB_LABELS.get(i).setTextColor(active ? LocalDownloadsUIState.primaryTextColor() : LocalDownloadsUIState.secondary());
             BOTTOM_TAB_LABELS.get(i).setTypeface(active ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);

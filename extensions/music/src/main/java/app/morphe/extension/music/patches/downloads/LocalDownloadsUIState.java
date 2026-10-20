@@ -2,7 +2,6 @@ package app.morphe.extension.music.patches.downloads;
 
 import android.app.ActionBar;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
@@ -110,13 +109,9 @@ public final class LocalDownloadsUIState {
     public static final String PREF_SWIPE_TO_PLAY_NEXT_KEY = "swipe_to_play_next_enabled";
     public static final String CUSTOM_WALLPAPER_FILE = "custom_theme_wallpaper.jpg";
 
-    // GÖREV 2: Oynatıcı Seçimi (0 = Normal, 1 = Faye)
-    public static final String PREF_PLAYER_TYPE_KEY = "selected_player_type";
-
-    // GÖREV 3: Faye özel renk kalıcılığı (renk seçici diyalogları için)
-    public static final String PREF_FAYE_BG_TOP_KEY = "faye_custom_bg_top";
-    public static final String PREF_FAYE_ACCENT_PRIMARY_KEY = "faye_custom_accent_primary";
-    public static final String PREF_FAYE_ACCENT_SECONDARY_KEY = "faye_custom_accent_secondary";
+    // HEX renk özelleştirmeleri (Faye kalıntılarının yerine)
+    public static final String PREF_HEX_ACCENT_KEY = "hex_custom_accent_color";
+    public static final String PREF_HEX_BG_KEY = "hex_custom_bg_color";
 
     public static final String PREF_EFFECTS_MASTER_KEY = "player_effects_master_enabled";
     public static final String PREF_ANIMATION_SPEED_KEY = "player_animation_speed_scale";
@@ -136,6 +131,16 @@ public final class LocalDownloadsUIState {
     public static final String PREF_CROSSFADE_SECONDS = "player_crossfade_seconds";
     public static final String PREF_SLEEP_FADE_ENABLED = "player_sleep_fade_enabled";
 
+    // Yeni: EQ, BassBoost, Hız
+    public static final String PREF_EQ_ENABLED = "player_eq_enabled";
+    public static final String PREF_EQ_BASS_ENABLED = "player_eq_bass_enabled";
+    public static final String PREF_EQ_BASS_STRENGTH = "player_eq_bass_strength";
+    public static final String PREF_EQ_BANDS_JSON = "player_eq_bands_json";
+    public static final String PREF_PLAYBACK_SPEED = "player_playback_speed";
+
+    // Yeni: İndirme hız limiti (KB/sn), 0 = sınırsız
+    public static final String PREF_DOWNLOAD_RATE_LIMIT = "download_rate_limit_kbps";
+
     public static final float DEFAULT_ANIMATION_SPEED = 1.0f;
     public static final float DEFAULT_ANIMATION_INTENSITY = 0.7f;
     public static final float MIN_ANIMATION_SPEED = 0.4f;
@@ -153,7 +158,6 @@ public final class LocalDownloadsUIState {
     public static final LruCache<String, Bitmap> ARTWORK_CACHE = new LruCache<>(90);
     public static final Map<String, CachedTrackEntry> TRACK_CACHE = new ConcurrentHashMap<>();
 
-    // GÖREV 7: Sanatçı listesini her seferinde hesaplamak yerine önbelleğe alıyoruz (Performans)
     private static List<String> cachedArtists = null;
 
     public record CachedTrackEntry(long lastModified, long length,
@@ -161,8 +165,7 @@ public final class LocalDownloadsUIState {
                                    OfflineTrack track) {}
 
     public enum ThemeAnimation {
-        STANDARD_PULSE, GRIFFITH_FLOW, FAYE_FLOW, EVANGELION_PULSE,
-        EMERALD_GLOW, SAPPHIRE_FLOW, CRIMSON_WAVE, AMETHYST_SHIMMER
+        STANDARD_PULSE, EMERALD_GLOW, SAPPHIRE_FLOW, CRIMSON_WAVE, AMETHYST_SHIMMER
     }
 
     public enum BackgroundColorMode {
@@ -190,14 +193,8 @@ public final class LocalDownloadsUIState {
     }
 
     /**
-     * Tema paletleri.
-     *
-     * <p><b>ÖNEMLİ:</b> Enum sabitleri normalde değiştirilemez ({@code final} alanlar).
-     * Ancak Faye teması için renk seçici diyaloğundan renkleri runtime'da değiştirebilmek
-     * istiyoruz. Bu yüzden renk alanlarını {@code final} olmaktan çıkardık. Enum sabiti
-     * kimliği (referans) hâlâ tekil kalır; sadece o sabitin <i>içindeki</i> renk int'leri
-     * mutate edilebilir. Java'da {@code new ThemePalette(...)} çağrısı <b>derleme hatası</b>
-     * verdiği için mutasyon yaklaşımı zorunludur.</p>
+     * Tema paletleri — anime temaları (Evangelion, Griffith, Faye) kaldırıldı.
+     * Renk alanları, HEX renk özelleştirmesi için runtime'da mutate edilebilir (final değil).
      */
     public enum ThemePalette {
         YT_MUSIC_PINK("YT Müzik Pembe Tema", Color.parseColor("#24071C"), Color.parseColor("#140410"), Color.parseColor("#090208"), Color.parseColor("#FF2A70"), Color.parseColor("#FF6E9E"), Color.argb(42, 255, 180, 215), Color.argb(75, 255, 80, 145), Color.parseColor("#FFFFFF")),
@@ -205,13 +202,9 @@ public final class LocalDownloadsUIState {
         EMERALD_DEPTH("Zümrüt Derinliği", Color.parseColor("#07261E"), Color.parseColor("#041511"), Color.parseColor("#020A08"), Color.parseColor("#10B981"), Color.parseColor("#34D399"), Color.argb(40, 16, 185, 129), Color.argb(75, 52, 211, 153), Color.parseColor("#041511")),
         SAPPHIRE_OCEAN("Safir Okyanus", Color.parseColor("#0A1931"), Color.parseColor("#060E1E"), Color.parseColor("#030710"), Color.parseColor("#3B82F6"), Color.parseColor("#60A5FA"), Color.argb(40, 59, 130, 246), Color.argb(75, 96, 165, 250), Color.parseColor("#FFFFFF")),
         CRIMSON_VELVET("Kızıl Kadife", Color.parseColor("#3B0711"), Color.parseColor("#1C0408"), Color.parseColor("#0A0203"), Color.parseColor("#F43F5E"), Color.parseColor("#FB7185"), Color.argb(40, 244, 63, 94), Color.argb(75, 251, 113, 133), Color.parseColor("#FFFFFF")),
-        ROYAL_AMETHYST("Asil Ametist", Color.parseColor("#240E3B"), Color.parseColor("#130721"), Color.parseColor("#08030F"), Color.parseColor("#A855F7"), Color.parseColor("#C084FC"), Color.argb(40, 168, 85, 247), Color.argb(75, 192, 132, 252), Color.parseColor("#FFFFFF")),
-        EVANGELION("Evangelion • Neon Genesis", Color.parseColor("#17102D"), Color.parseColor("#090B19"), Color.parseColor("#03050B"), Color.parseColor("#A855F7"), Color.parseColor("#B6FF00"), Color.argb(42, 168, 85, 247), Color.argb(85, 182, 255, 0), Color.parseColor("#FFFFFF")),
-        GRIFFITH("Berserk • Griffith", Color.parseColor("#292B36"), Color.parseColor("#12131A"), Color.parseColor("#07070B"), Color.parseColor("#E6E8F0"), Color.parseColor("#8E2945"), Color.argb(38, 230, 232, 240), Color.argb(75, 142, 41, 69), Color.parseColor("#101116")),
-        FAYE("Cowboy Bebop • Faye", Color.parseColor("#35164A"), Color.parseColor("#1B0D2B"), Color.parseColor("#090511"), Color.parseColor("#C77DFF"), Color.parseColor("#FFD166"), Color.argb(46, 199, 125, 255), Color.argb(92, 255, 209, 102), Color.parseColor("#21112E"));
+        ROYAL_AMETHYST("Asil Ametist", Color.parseColor("#240E3B"), Color.parseColor("#130721"), Color.parseColor("#08030F"), Color.parseColor("#A855F7"), Color.parseColor("#C084FC"), Color.argb(40, 168, 85, 247), Color.argb(75, 192, 132, 252), Color.parseColor("#FFFFFF"));
 
         public final String label;
-        // DİKKAT: Faye renk seçicisi için bu alanlar artık final DEĞİL (mutasyon için).
         public int varBgTop, varBgMid, varBgBottom, varAccentPrimary, varAccentSecondary,
                    varGlassSurface, varGlassBorder, varOnAccent;
 
@@ -219,21 +212,6 @@ public final class LocalDownloadsUIState {
             this.label = label; this.varBgTop = varBgTop; this.varBgMid = varBgMid; this.varBgBottom = varBgBottom;
             this.varAccentPrimary = varAccentPrimary; this.varAccentSecondary = varAccentSecondary;
             this.varGlassSurface = varGlassSurface; this.varGlassBorder = varGlassBorder; this.varOnAccent = varOnAccent;
-        }
-
-        /**
-         * Faye paletini fabrika değerlerine döndürür. Renk seçici diyaloğundaki
-         * "Varsayılan Faye Ayarlarına Dön" butonundan çağrılır.
-         */
-        public static void resetFayeDefaults() {
-            FAYE.varBgTop          = Color.parseColor("#35164A");
-            FAYE.varBgMid          = Color.parseColor("#1B0D2B");
-            FAYE.varBgBottom       = Color.parseColor("#090511");
-            FAYE.varAccentPrimary  = Color.parseColor("#C77DFF");
-            FAYE.varAccentSecondary= Color.parseColor("#FFD166");
-            FAYE.varGlassSurface   = Color.argb(46, 199, 125, 255);
-            FAYE.varGlassBorder    = Color.argb(92, 255, 209, 102);
-            FAYE.varOnAccent       = Color.parseColor("#21112E");
         }
     }
 
@@ -291,7 +269,7 @@ public final class LocalDownloadsUIState {
     @Nullable public static ImageButton selectModeBtn;
     @Nullable public static ImageButton headerFilterBtn;
     @Nullable public static ImageButton headerSettingsBtn;
-    @Nullable public static AlertDialog queueManagerDialog;
+    @Nullable public static android.app.AlertDialog queueManagerDialog;
 
     public static final Map<View, Integer> hiddenHostViews = new HashMap<>();
     public static boolean hostActionBarStateCaptured = false;
@@ -315,72 +293,51 @@ public final class LocalDownloadsUIState {
             customWallpaperActive = false;
             swipeToPlayNext = true;
         }
-        // Faye özel renk kalıcılığını geri yükle (varsa)
-        loadFayeCustomColors(context);
+        applyHexOverrides(context);
         reloadCustomWallpaper(musicRoot);
     }
 
-    /**
-     * Faye teması için kullanıcının özelleştirdiği renkleri prefs'ten yükler.
-     * Uygulama süreci her başladığında enum sabitleri fabrika değerine döner;
-     * bu metot en son kaydedilen özel renkleri geri uygular.
-     */
-    public static void loadFayeCustomColors(Context context) {
+    public static void applyHexOverrides(Context context) {
         if (context == null) return;
         try {
-            SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-            if (prefs.contains(PREF_FAYE_BG_TOP_KEY)) {
-                ThemePalette.FAYE.varBgTop = prefs.getInt(PREF_FAYE_BG_TOP_KEY, ThemePalette.FAYE.varBgTop);
+            SharedPreferences p = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+            String accent = p.getString(PREF_HEX_ACCENT_KEY, "");
+            String bg = p.getString(PREF_HEX_BG_KEY, "");
+            if (accent != null && !accent.isBlank()) {
+                int c = Color.parseColor(accent);
+                currentTheme.varAccentPrimary = c;
+                currentTheme.varGlassBorder = (c & 0x00FFFFFF) | 0xB0000000;
             }
-            if (prefs.contains(PREF_FAYE_ACCENT_PRIMARY_KEY)) {
-                ThemePalette.FAYE.varAccentPrimary = prefs.getInt(PREF_FAYE_ACCENT_PRIMARY_KEY, ThemePalette.FAYE.varAccentPrimary);
-            }
-            if (prefs.contains(PREF_FAYE_ACCENT_SECONDARY_KEY)) {
-                ThemePalette.FAYE.varAccentSecondary = prefs.getInt(PREF_FAYE_ACCENT_SECONDARY_KEY, ThemePalette.FAYE.varAccentSecondary);
+            if (bg != null && !bg.isBlank()) {
+                int c = Color.parseColor(bg);
+                currentTheme.varBgTop = c;
+                currentTheme.varBgMid = blendColors(c, Color.BLACK, 0.45f);
+                currentTheme.varBgBottom = blendColors(c, Color.BLACK, 0.75f);
             }
         } catch (Exception ignored) {}
     }
 
-    /**
-     * Renk seçici diyaloğundan çağrılır. Faye enum alanını mutate eder ve
-     * değeri kalıcı hale getirir.
-     *
-     * @param type 0 = bgTop, 1 = accentPrimary, 2 = accentSecondary
-     */
-    public static void saveFayeCustomColor(Context context, int type, int color) {
-        switch (type) {
-            case 0 -> ThemePalette.FAYE.varBgTop = color;
-            case 1 -> ThemePalette.FAYE.varAccentPrimary = color;
-            case 2 -> ThemePalette.FAYE.varAccentSecondary = color;
-            default -> { return; }
-        }
-        if (context == null) return;
-        try {
-            SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-            String key = type == 0 ? PREF_FAYE_BG_TOP_KEY
-                    : type == 1 ? PREF_FAYE_ACCENT_PRIMARY_KEY
-                    : PREF_FAYE_ACCENT_SECONDARY_KEY;
-            prefs.edit().putInt(key, color).apply();
-        } catch (Exception ignored) {}
+    public static void saveHexAccent(Context ctx, String hex) {
+        try { ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit().putString(PREF_HEX_ACCENT_KEY, hex).apply(); }
+        catch (Exception ignored) {}
+        applyHexOverrides(ctx);
     }
 
-    /** Faye özel renklerini prefs'ten siler (varsayılana dön için). */
-    public static void clearFayeCustomColors(Context context) {
-        if (context == null) return;
+    public static void saveHexBackground(Context ctx, String hex) {
+        try { ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit().putString(PREF_HEX_BG_KEY, hex).apply(); }
+        catch (Exception ignored) {}
+        applyHexOverrides(ctx);
+    }
+
+    public static void clearHexOverrides(Context ctx) {
         try {
-            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
-                    .remove(PREF_FAYE_BG_TOP_KEY)
-                    .remove(PREF_FAYE_ACCENT_PRIMARY_KEY)
-                    .remove(PREF_FAYE_ACCENT_SECONDARY_KEY)
-                    .apply();
+            ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+                    .remove(PREF_HEX_ACCENT_KEY).remove(PREF_HEX_BG_KEY).apply();
         } catch (Exception ignored) {}
     }
 
     public static void reloadCustomWallpaper(File musicRoot) {
-        if (!customWallpaperActive || musicRoot == null) {
-            customWallpaperBitmap = null;
-            return;
-        }
+        if (!customWallpaperActive || musicRoot == null) { customWallpaperBitmap = null; return; }
         File f = new File(musicRoot, CUSTOM_WALLPAPER_FILE);
         customWallpaperBitmap = f.isFile() ? OfflineStorage.decodeArtwork(f, 1080) : null;
         if (customWallpaperBitmap == null) customWallpaperActive = false;
@@ -407,24 +364,11 @@ public final class LocalDownloadsUIState {
         Utils.showToastShort("Özel duvar kağıdı sıfırlandı");
     }
 
-    public static boolean isPlayer2FayeSelected(Context ctx) {
-        if (ctx == null) return false;
-        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).getInt(PREF_PLAYER_TYPE_KEY, 0) == 1;
-    }
-
-    public static void setPlayer2FayeSelected(Context ctx, boolean selected) {
-        if (ctx == null) return;
-        ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-                .edit().putInt(PREF_PLAYER_TYPE_KEY, selected ? 1 : 0).apply();
-    }
-
     public static void refreshAllThemeVisuals(LocalDownloadsFragment fragment) {
         Context ctx = fragment != null ? fragment.getActivity() : Utils.getContext();
         applyListBackground(rootLayout);
 
-        if (headerLayout != null) {
-            LocalDownloadsAnimator.animateBackgroundColorChange(headerLayout, currentTheme.varBgTop);
-        }
+        if (headerLayout != null) LocalDownloadsAnimator.animateBackgroundColorChange(headerLayout, currentTheme.varBgTop);
         if (summary != null) summary.setTextColor(primaryTextColor());
         if (headerFilterBtn != null && ctx != null) {
             headerFilterBtn.setImageDrawable(createVectorIconDrawable(ctx, ICON_FILTER, activeAccentColor(), 0));
@@ -453,48 +397,28 @@ public final class LocalDownloadsUIState {
         }
         if (fabPlusButton != null) {
             fabPlusButton.setTextColor(currentTheme.varOnAccent);
-            GradientDrawable fabBg = new GradientDrawable(
-                    GradientDrawable.Orientation.TL_BR,
+            GradientDrawable fabBg = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                     new int[]{activeAccentColor(), activeSecondaryAccent()});
             fabBg.setShape(GradientDrawable.OVAL);
-            fabPlusButton.setBackground(new RippleDrawable(
-                    ColorStateList.valueOf(Color.argb(70, 255, 255, 255)), fabBg, fabBg));
+            fabPlusButton.setBackground(new RippleDrawable(ColorStateList.valueOf(Color.argb(70, 255, 255, 255)), fabBg, fabBg));
         }
         if (downloadBanner != null && ctx != null) {
             downloadBanner.setBackground(glassCardDrawable(ctx, dp(ctx, 12), true));
-            if (downloadBannerProgress != null) {
-                downloadBannerProgress.setProgressDrawable(createThemeProgressDrawable(dp(ctx, 4), true));
-            }
+            if (downloadBannerProgress != null) downloadBannerProgress.setProgressDrawable(createThemeProgressDrawable(dp(ctx, 4), true));
         }
-        if (batchActionBar != null && ctx != null) {
-            batchActionBar.setBackground(glassCardDrawable(ctx, dp(ctx, 12), true));
-        }
-        if (bottomNavLayout != null && ctx != null) {
-            LocalDownloadsHeader.refreshBottomNavigationTheme(ctx);
-        }
+        if (batchActionBar != null && ctx != null) batchActionBar.setBackground(glassCardDrawable(ctx, dp(ctx, 12), true));
+        if (bottomNavLayout != null && ctx != null) LocalDownloadsHeader.refreshBottomNavigationTheme(ctx);
         if (fragment != null) fragment.showTracks();
-
         LocalDownloadsPlayer.updateDynamicPlayerColors(ctx);
     }
 
-    public static int primaryTextColor() {
-        return currentTheme == ThemePalette.FAYE ? Color.parseColor("#FFE7A3") : Color.WHITE;
-    }
-
+    public static int primaryTextColor() { return Color.WHITE; }
     public static int activeAccentColor() { return currentTheme.varAccentPrimary; }
     public static int activeSecondaryAccent() { return currentTheme.varAccentSecondary; }
+    public static int secondary() { return Color.argb(180, 235, 230, 240); }
 
-    public static int secondary() {
-        return currentTheme == ThemePalette.FAYE ? Color.parseColor("#CDBBD9") : Color.argb(180, 235, 230, 240);
-    }
-
-    public static int dp(Context ctx, int val) {
-        return (int) (val * ctx.getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    public static float dp(Context ctx, float val) {
-        return val * ctx.getResources().getDisplayMetrics().density;
-    }
+    public static int dp(Context ctx, int val) { return (int) (val * ctx.getResources().getDisplayMetrics().density + 0.5f); }
+    public static float dp(Context ctx, float val) { return val * ctx.getResources().getDisplayMetrics().density; }
 
     public static int rippleColor() {
         int accent = activeAccentColor();
@@ -558,13 +482,11 @@ public final class LocalDownloadsUIState {
     public static Drawable buildSceneBackgroundDrawable(@Nullable OfflineTrack track, boolean isFullPlayer) {
         return new Drawable() {
             private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
             @Override
             public void draw(@NonNull Canvas canvas) {
                 Rect b = getBounds();
                 int w = b.width(), h = b.height();
                 if (w <= 0 || h <= 0) return;
-
                 if (customWallpaperActive && customWallpaperBitmap != null) {
                     drawCenterCropBitmap(canvas, customWallpaperBitmap, w, h);
                     paint.setShader(new LinearGradient(0, 0, 0, h,
@@ -572,25 +494,17 @@ public final class LocalDownloadsUIState {
                                     Color.argb(145, Color.red(currentTheme.varBgTop), Color.green(currentTheme.varBgTop), Color.blue(currentTheme.varBgTop)),
                                     Color.argb(200, Color.red(currentTheme.varBgMid), Color.green(currentTheme.varBgMid), Color.blue(currentTheme.varBgMid)),
                                     Color.argb(242, Color.red(currentTheme.varBgBottom), Color.green(currentTheme.varBgBottom), Color.blue(currentTheme.varBgBottom))
-                            },
-                            null, Shader.TileMode.CLAMP));
+                            }, null, Shader.TileMode.CLAMP));
                     canvas.drawRect(0, 0, w, h, paint);
                     paint.setShader(null);
                     return;
                 }
-
-                int top = currentTheme.varBgTop;
-                int mid = currentTheme.varBgMid;
-                int bot = currentTheme.varBgBottom;
-                if (track != null && isFullPlayer) {
-                    top = blendColors(top, track.extractDominantColor(top), 0.32f);
-                }
-
+                int top = currentTheme.varBgTop, mid = currentTheme.varBgMid, bot = currentTheme.varBgBottom;
+                if (track != null && isFullPlayer) top = blendColors(top, track.extractDominantColor(top), 0.32f);
                 paint.setShader(new LinearGradient(0, 0, 0, h, new int[]{top, mid, bot}, new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP));
                 canvas.drawRect(0, 0, w, h, paint);
                 paint.setShader(null);
             }
-
             private void drawCenterCropBitmap(Canvas canvas, Bitmap bmp, int viewW, int viewH) {
                 int bw = bmp.getWidth(), bh = bmp.getHeight();
                 float scale = Math.max((float) viewW / bw, (float) viewH / bh);
@@ -601,7 +515,6 @@ public final class LocalDownloadsUIState {
                 Rect dst = new Rect(0, 0, viewW, viewH);
                 canvas.drawBitmap(bmp, src, dst, paint);
             }
-
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
             @Override public void setColorFilter(@Nullable ColorFilter cf) { paint.setColorFilter(cf); }
             @Override public int getOpacity() { return PixelFormat.OPAQUE; }
@@ -619,39 +532,26 @@ public final class LocalDownloadsUIState {
     public static Drawable createThemeProgressDrawable(final int barHeightPx, final boolean rounded) {
         return new Drawable() {
             private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-
-            @Override
-            protected boolean onLevelChange(int level) {
-                invalidateSelf();
-                return true;
-            }
-
-            @Override
-            public void draw(@NonNull Canvas canvas) {
+            @Override protected boolean onLevelChange(int level) { invalidateSelf(); return true; }
+            @Override public void draw(@NonNull Canvas canvas) {
                 Rect b = getBounds();
                 if (b.width() <= 0 || b.height() <= 0) return;
-
                 float cy = b.exactCenterY();
                 float halfH = barHeightPx / 2f;
                 float radius = rounded ? halfH : 0f;
-
                 paint.setShader(null);
                 paint.setColor(Color.argb(85, 255, 255, 255));
                 RectF trackRect = new RectF(b.left, cy - halfH, b.right, cy + halfH);
                 canvas.drawRoundRect(trackRect, radius, radius, paint);
-
                 float ratio = Math.max(0f, Math.min(1f, getLevel() / 10000f));
                 float playedRight = b.left + b.width() * ratio;
                 if (playedRight > b.left) {
                     RectF playedRect = new RectF(b.left, cy - halfH, playedRight, cy + halfH);
-                    paint.setShader(new LinearGradient(
-                            b.left, cy, b.right, cy,
-                            new int[]{activeAccentColor(), activeSecondaryAccent()},
-                            null, Shader.TileMode.CLAMP));
+                    paint.setShader(new LinearGradient(b.left, cy, b.right, cy,
+                            new int[]{activeAccentColor(), activeSecondaryAccent()}, null, Shader.TileMode.CLAMP));
                     canvas.drawRoundRect(playedRect, radius, radius, paint);
                 }
             }
-
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
             @Override public void setColorFilter(@Nullable ColorFilter cf) { paint.setColorFilter(cf); }
             @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
@@ -672,10 +572,7 @@ public final class LocalDownloadsUIState {
                     paint.setStyle(Paint.Style.FILL);
                     float s = dp(ctx, 10f);
                     Path p = new Path();
-                    p.moveTo(cx - s * 0.65f, cy - s);
-                    p.lineTo(cx + s * 0.95f, cy);
-                    p.lineTo(cx - s * 0.65f, cy + s);
-                    p.close();
+                    p.moveTo(cx - s * 0.65f, cy - s); p.lineTo(cx + s * 0.95f, cy); p.lineTo(cx - s * 0.65f, cy + s); p.close();
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_PAUSE) {
                     paint.setStyle(Paint.Style.FILL);
@@ -686,25 +583,16 @@ public final class LocalDownloadsUIState {
                     paint.setStyle(Paint.Style.FILL);
                     float s = dp(ctx, 8f);
                     canvas.drawRoundRect(new RectF(cx - s, cy - s, cx - s + dp(ctx, 2.5f), cy + s), dp(ctx, 1f), dp(ctx, 1f), paint);
-                    Path p = new Path();
-                    p.moveTo(cx + s, cy - s);
-                    p.lineTo(cx - s + dp(ctx, 3f), cy);
-                    p.lineTo(cx + s, cy + s);
-                    p.close();
+                    Path p = new Path(); p.moveTo(cx + s, cy - s); p.lineTo(cx - s + dp(ctx, 3f), cy); p.lineTo(cx + s, cy + s); p.close();
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_SKIP_NEXT) {
                     paint.setStyle(Paint.Style.FILL);
                     float s = dp(ctx, 8f);
                     canvas.drawRoundRect(new RectF(cx + s - dp(ctx, 2.5f), cy - s, cx + s, cy + s), dp(ctx, 1f), dp(ctx, 1f), paint);
-                    Path p = new Path();
-                    p.moveTo(cx - s, cy - s);
-                    p.lineTo(cx + s - dp(ctx, 3f), cy);
-                    p.lineTo(cx - s, cy + s);
-                    p.close();
+                    Path p = new Path(); p.moveTo(cx - s, cy - s); p.lineTo(cx + s - dp(ctx, 3f), cy); p.lineTo(cx - s, cy + s); p.close();
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_PALETTE || type == ICON_SETTINGS) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     canvas.drawCircle(cx, cy, dp(ctx, 5.5f), paint);
                     for (int a = 0; a < 360; a += 45) {
                         double rad = Math.toRadians(a);
@@ -715,53 +603,41 @@ public final class LocalDownloadsUIState {
                         canvas.drawLine(x1, y1, x2, y2, paint);
                     }
                 } else if (type == ICON_FILTER) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     Path p = new Path();
-                    p.moveTo(cx - dp(ctx, 8f), cy - dp(ctx, 6f));
-                    p.lineTo(cx + dp(ctx, 8f), cy - dp(ctx, 6f));
-                    p.lineTo(cx + dp(ctx, 3f), cy - dp(ctx, 1f));
-                    p.lineTo(cx + dp(ctx, 3f), cy + dp(ctx, 6f));
-                    p.lineTo(cx - dp(ctx, 2f), cy + dp(ctx, 8f));
-                    p.lineTo(cx - dp(ctx, 2f), cy - dp(ctx, 1f));
-                    p.close();
+                    p.moveTo(cx - dp(ctx, 8f), cy - dp(ctx, 6f)); p.lineTo(cx + dp(ctx, 8f), cy - dp(ctx, 6f));
+                    p.lineTo(cx + dp(ctx, 3f), cy - dp(ctx, 1f)); p.lineTo(cx + dp(ctx, 3f), cy + dp(ctx, 6f));
+                    p.lineTo(cx - dp(ctx, 2f), cy + dp(ctx, 8f)); p.lineTo(cx - dp(ctx, 2f), cy - dp(ctx, 1f)); p.close();
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_CLOSE) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2.2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2.2f));
                     float s = dp(ctx, 6f);
                     canvas.drawLine(cx - s, cy - s, cx + s, cy + s, paint);
                     canvas.drawLine(cx + s, cy - s, cx - s, cy + s, paint);
                 } else if (type == ICON_BACK) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2.2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2.2f));
                     float s = dp(ctx, 6.5f);
                     canvas.drawLine(cx - s, cy, cx + s, cy, paint);
                     canvas.drawLine(cx - s, cy, cx - dp(ctx, 1f), cy - dp(ctx, 5.5f), paint);
                     canvas.drawLine(cx - s, cy, cx - dp(ctx, 1f), cy + dp(ctx, 5.5f), paint);
                 } else if (type == ICON_GRID) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 1.8f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 1.8f));
                     float g = dp(ctx, 6.5f), gap = dp(ctx, 1.5f);
                     canvas.drawRoundRect(new RectF(cx - g, cy - g, cx - gap, cy - gap), dp(ctx, 1.5f), dp(ctx, 1.5f), paint);
                     canvas.drawRoundRect(new RectF(cx + gap, cy - g, cx + g, cy - gap), dp(ctx, 1.5f), dp(ctx, 1.5f), paint);
                     canvas.drawRoundRect(new RectF(cx - g, cy + gap, cx - gap, cy + g), dp(ctx, 1.5f), dp(ctx, 1.5f), paint);
                     canvas.drawRoundRect(new RectF(cx + gap, cy + gap, cx + g, cy + g), dp(ctx, 1.5f), dp(ctx, 1.5f), paint);
                 } else if (type == ICON_LIST) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     float w = dp(ctx, 7f);
                     canvas.drawLine(cx - w, cy - dp(ctx, 5f), cx + w, cy - dp(ctx, 5f), paint);
                     canvas.drawLine(cx - w, cy, cx + w, cy, paint);
                     canvas.drawLine(cx - w, cy + dp(ctx, 5f), cx + w, cy + dp(ctx, 5f), paint);
                 } else if (type == ICON_DOWNLOAD_MANAGER || type == ICON_DOWNLOAD) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     canvas.drawLine(cx, cy - dp(ctx, 7f), cx, cy + dp(ctx, 3f), paint);
                     Path p = new Path();
-                    p.moveTo(cx - dp(ctx, 4.5f), cy - dp(ctx, 1f));
-                    p.lineTo(cx, cy + dp(ctx, 3.5f));
-                    p.lineTo(cx + dp(ctx, 4.5f), cy - dp(ctx, 1f));
+                    p.moveTo(cx - dp(ctx, 4.5f), cy - dp(ctx, 1f)); p.lineTo(cx, cy + dp(ctx, 3.5f)); p.lineTo(cx + dp(ctx, 4.5f), cy - dp(ctx, 1f));
                     canvas.drawPath(p, paint);
                     canvas.drawLine(cx - dp(ctx, 6f), cy + dp(ctx, 7f), cx + dp(ctx, 6f), cy + dp(ctx, 7f), paint);
                 } else if (type == ICON_MORE_VERT) {
@@ -771,53 +647,35 @@ public final class LocalDownloadsUIState {
                     canvas.drawCircle(cx, cy, r, paint);
                     canvas.drawCircle(cx, cy + dp(ctx, 6f), r, paint);
                 } else if (type == ICON_CHECKLIST) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     canvas.drawRoundRect(new RectF(cx - dp(ctx, 7f), cy - dp(ctx, 7f), cx + dp(ctx, 7f), cy + dp(ctx, 7f)), dp(ctx, 2.5f), dp(ctx, 2.5f), paint);
                     Path p = new Path();
-                    p.moveTo(cx - dp(ctx, 3.5f), cy);
-                    p.lineTo(cx - dp(ctx, 1f), cy + dp(ctx, 2.8f));
-                    p.lineTo(cx + dp(ctx, 4f), cy - dp(ctx, 2.8f));
+                    p.moveTo(cx - dp(ctx, 3.5f), cy); p.lineTo(cx - dp(ctx, 1f), cy + dp(ctx, 2.8f)); p.lineTo(cx + dp(ctx, 4f), cy - dp(ctx, 2.8f));
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_CHEVRON_DOWN) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2.2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2.2f));
                     float s = dp(ctx, 7f);
                     Path p = new Path();
-                    p.moveTo(cx - s, cy - s / 2f);
-                    p.lineTo(cx, cy + s / 2f);
-                    p.lineTo(cx + s, cy - s / 2f);
+                    p.moveTo(cx - s, cy - s / 2f); p.lineTo(cx, cy + s / 2f); p.lineTo(cx + s, cy - s / 2f);
                     canvas.drawPath(p, paint);
                 } else if (type == ICON_SHUFFLE) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     float s = dp(ctx, 7f);
                     Path p = new Path();
-                    p.moveTo(cx - s, cy - s * 0.6f);
-                    p.lineTo(cx + s, cy + s * 0.6f);
-                    p.moveTo(cx - s, cy + s * 0.6f);
-                    p.lineTo(cx + s, cy - s * 0.6f);
+                    p.moveTo(cx - s, cy - s * 0.6f); p.lineTo(cx + s, cy + s * 0.6f);
+                    p.moveTo(cx - s, cy + s * 0.6f); p.lineTo(cx + s, cy - s * 0.6f);
                     canvas.drawPath(p, paint);
-                    if (mode != 0) {
-                        paint.setStyle(Paint.Style.FILL);
-                        canvas.drawCircle(cx, cy + dp(ctx, 11f), dp(ctx, 2.2f), paint);
-                    }
+                    if (mode != 0) { paint.setStyle(Paint.Style.FILL); canvas.drawCircle(cx, cy + dp(ctx, 11f), dp(ctx, 2.2f), paint); }
                 } else if (type == ICON_REPEAT) {
-                    paint.setStyle(Paint.Style.STROKE);
-                    paint.setStrokeWidth(dp(ctx, 2f));
+                    paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(ctx, 2f));
                     float r = dp(ctx, 7f);
                     canvas.drawRoundRect(new RectF(cx - r, cy - r * 0.7f, cx + r, cy + r * 0.7f), dp(ctx, 4f), dp(ctx, 4f), paint);
                     if (mode == OfflinePlaybackService.REPEAT_ONE) {
                         paint.setStyle(Paint.Style.FILL);
-                        paint.setTextSize(dp(ctx, 9f));
-                        paint.setTypeface(Typeface.DEFAULT_BOLD);
-                        paint.setTextAlign(Paint.Align.CENTER);
+                        paint.setTextSize(dp(ctx, 9f)); paint.setTypeface(Typeface.DEFAULT_BOLD); paint.setTextAlign(Paint.Align.CENTER);
                         canvas.drawText("1", cx, cy + dp(ctx, 3f), paint);
                     }
-                    if (mode != OfflinePlaybackService.REPEAT_OFF) {
-                        paint.setStyle(Paint.Style.FILL);
-                        canvas.drawCircle(cx, cy + dp(ctx, 11f), dp(ctx, 2.2f), paint);
-                    }
+                    if (mode != OfflinePlaybackService.REPEAT_OFF) { paint.setStyle(Paint.Style.FILL); canvas.drawCircle(cx, cy + dp(ctx, 11f), dp(ctx, 2.2f), paint); }
                 }
             }
             @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
@@ -828,9 +686,7 @@ public final class LocalDownloadsUIState {
 
     public static TextView text(Context ctx, String val, int sp, int color) {
         TextView v = new TextView(ctx);
-        v.setText(val);
-        v.setTextSize(sp);
-        v.setTextColor(color);
+        v.setText(val); v.setTextSize(sp); v.setTextColor(color);
         v.setGravity(Gravity.CENTER_VERTICAL);
         return v;
     }
@@ -874,10 +730,8 @@ public final class LocalDownloadsUIState {
         ImageView v = new ImageView(ctx);
         v.setBackgroundColor(Color.argb(45, 255, 255, 255));
         roundCorners(ctx, v, cornerDp);
-        if (bmp != null) {
-            v.setImageBitmap(bmp);
-            v.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        } else {
+        if (bmp != null) { v.setImageBitmap(bmp); v.setScaleType(ImageView.ScaleType.CENTER_CROP); }
+        else {
             v.setImageDrawable(createVectorIconDrawable(ctx, ICON_PLAY, activeAccentColor(), 0));
             v.setPadding(dp(ctx, 12), dp(ctx, 12), dp(ctx, 12), dp(ctx, 12));
         }
@@ -887,10 +741,7 @@ public final class LocalDownloadsUIState {
     public static void roundCorners(Context ctx, View v, int cornerDp) {
         final float r = dp(ctx, (float) cornerDp);
         v.setOutlineProvider(new ViewOutlineProvider() {
-            @Override
-            public void getOutline(View view, Outline o) {
-                o.setRoundRect(0, 0, view.getWidth(), view.getHeight(), r);
-            }
+            @Override public void getOutline(View view, Outline o) { o.setRoundRect(0, 0, view.getWidth(), view.getHeight(), r); }
         });
         v.setClipToOutline(true);
     }
@@ -949,10 +800,7 @@ public final class LocalDownloadsUIState {
         EditText field = searchBar;
         if (field == null || ctx == null) return;
         InputMethodManager keyboard = (InputMethodManager) ctx.getSystemService(Context.INPUT_METHOD_SERVICE);
-        if (keyboard != null) {
-            try { keyboard.hideSoftInputFromWindow(field.getWindowToken(), 0); }
-            catch (RuntimeException ignored) {}
-        }
+        if (keyboard != null) { try { keyboard.hideSoftInputFromWindow(field.getWindowToken(), 0); } catch (RuntimeException ignored) {} }
         field.clearFocus();
         if (rootLayout != null) rootLayout.requestFocus();
     }
@@ -972,22 +820,16 @@ public final class LocalDownloadsUIState {
             return;
         }
         if (kb != null) kb.hideSoftInputFromWindow(field.getWindowToken(), 0);
-        field.setText("");
-        field.clearFocus();
+        field.setText(""); field.clearFocus();
         if (rootLayout != null) rootLayout.requestFocus();
         LocalDownloadsAnimator.slideViewHeight(field, 0);
         field.animate().cancel();
         field.animate().alpha(0f).setDuration(LocalDownloadsAnimator.SEARCH_ANIM_MS)
-                .withEndAction(() -> {
-                    if (searchBar == field) field.setVisibility(View.GONE);
-                }).start();
+                .withEndAction(() -> { if (searchBar == field) field.setVisibility(View.GONE); }).start();
     }
 
     public static void loadTracksIfNeeded(File musicRoot) {
-        if (!diskReloadNeeded && !tracks.isEmpty()) {
-            tracks.sort(comparator());
-            return;
-        }
+        if (!diskReloadNeeded && !tracks.isEmpty()) { tracks.sort(comparator()); return; }
         diskReloadNeeded = false;
         tracks = new ArrayList<>();
         File[] files = musicRoot.listFiles(f -> f.isFile() && (f.getName().endsWith(".webm") || f.getName().endsWith(".m4a")));
@@ -1013,8 +855,6 @@ public final class LocalDownloadsUIState {
         }
         playlists = OfflineStorage.loadPlaylists(musicRoot);
         if (selectedPlaylist != null && findPlaylist(selectedPlaylist) == null) selectedPlaylist = null;
-
-        // Sanatçı önbelleğini geçersiz kıl (yeniden yükleme yapıldı)
         invalidateArtistCache();
     }
 
@@ -1024,15 +864,9 @@ public final class LocalDownloadsUIState {
         for (OfflineStorage.Playlist primary : OfflineStorage.buildPrimaryLibraryGrid(tracks, playlists)) {
             if (primary.name().equalsIgnoreCase(name)) return primary;
         }
-        for (OfflineStorage.Playlist p : playlists) {
-            if (p.name().equalsIgnoreCase(name)) return p;
-        }
-        for (OfflineStorage.Playlist smart : OfflineStorage.buildSmartPlaylists(tracks)) {
-            if (smart.name().equalsIgnoreCase(name)) return smart;
-        }
-        for (OfflineStorage.Playlist artistCard : OfflineStorage.buildArtistCards(tracks)) {
-            if (artistCard.name().equalsIgnoreCase(name)) return artistCard;
-        }
+        for (OfflineStorage.Playlist p : playlists) if (p.name().equalsIgnoreCase(name)) return p;
+        for (OfflineStorage.Playlist smart : OfflineStorage.buildSmartPlaylists(tracks)) if (smart.name().equalsIgnoreCase(name)) return smart;
+        for (OfflineStorage.Playlist artistCard : OfflineStorage.buildArtistCards(tracks)) if (artistCard.name().equalsIgnoreCase(name)) return artistCard;
         return null;
     }
 
@@ -1055,36 +889,26 @@ public final class LocalDownloadsUIState {
     @Nullable
     public static OfflineTrack findByPath(String path) {
         if (path == null || path.isEmpty()) return null;
-        for (OfflineTrack t : tracks) {
-            if (t.audioFile().getAbsolutePath().equals(path)) return t;
-        }
+        for (OfflineTrack t : tracks) if (t.audioFile().getAbsolutePath().equals(path)) return t;
         return null;
     }
 
     @Nullable
     public static OfflineTrack findById(String videoId) {
-        for (OfflineTrack t : tracks) {
-            if (t.videoId().equals(videoId)) return t;
-        }
+        for (OfflineTrack t : tracks) if (t.videoId().equals(videoId)) return t;
         return null;
     }
 
     public static Set<String> getAllPlaylistTrackIds() {
         Set<String> set = new HashSet<>();
-        for (OfflineStorage.Playlist p : playlists) {
-            set.addAll(p.videoIds());
-        }
+        for (OfflineStorage.Playlist p : playlists) set.addAll(p.videoIds());
         return set;
     }
 
-    public static void invalidateArtistCache() {
-        cachedArtists = null;
-    }
+    public static void invalidateArtistCache() { cachedArtists = null; }
 
-    // GÖREV 7: Sanatçı Rafı için performans optimizasyonu (Önbellekli Liste)
     public static List<String> getAllArtists() {
         if (cachedArtists != null) return cachedArtists;
-
         Set<String> artists = new HashSet<>();
         for (OfflineTrack t : tracks) {
             String artist = t.displayArtist();
@@ -1117,9 +941,14 @@ public final class LocalDownloadsUIState {
                 : String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
     }
 
-    public static String formatSize(long b) {
-        return String.format(Locale.ROOT, "%.1f", b / 1048576.0);
+    public static String formatLongDuration(int seconds) {
+        if (seconds <= 0) return "0 dk";
+        int h = seconds / 3600, m = (seconds % 3600) / 60;
+        if (h > 0) return h + " sa " + m + " dk";
+        return Math.max(1, m) + " dk";
     }
+
+    public static String formatSize(long b) { return String.format(Locale.ROOT, "%.1f", b / 1048576.0); }
 
     public static String formatSpeed(long bytesPerSec) {
         if (bytesPerSec <= 0) return "0 KB/sn";
@@ -1132,10 +961,7 @@ public final class LocalDownloadsUIState {
         try {
             ActionBar actionBar = act.getActionBar();
             if (actionBar != null) {
-                if (!hostActionBarStateCaptured) {
-                    hostActionBarWasShowing = actionBar.isShowing();
-                    hostActionBarStateCaptured = true;
-                }
+                if (!hostActionBarStateCaptured) { hostActionBarWasShowing = actionBar.isShowing(); hostActionBarStateCaptured = true; }
                 actionBar.hide();
             }
         } catch (Exception ignored) {}
@@ -1155,10 +981,7 @@ public final class LocalDownloadsUIState {
             }
             if (hostActionBarStateCaptured) {
                 ActionBar actionBar = act.getActionBar();
-                if (actionBar != null) {
-                    if (hostActionBarWasShowing) actionBar.show();
-                    else actionBar.hide();
-                }
+                if (actionBar != null) { if (hostActionBarWasShowing) actionBar.show(); else actionBar.hide(); }
             }
         }
         hostActionBarStateCaptured = false;
@@ -1168,9 +991,6 @@ public final class LocalDownloadsUIState {
     public static ThemeAnimation getAnimationForTheme(ThemePalette theme) {
         if (theme == null) return ThemeAnimation.STANDARD_PULSE;
         switch (theme) {
-            case GRIFFITH: return ThemeAnimation.GRIFFITH_FLOW;
-            case FAYE: return ThemeAnimation.FAYE_FLOW;
-            case EVANGELION: return ThemeAnimation.EVANGELION_PULSE;
             case EMERALD_DEPTH: return ThemeAnimation.EMERALD_GLOW;
             case SAPPHIRE_OCEAN: return ThemeAnimation.SAPPHIRE_FLOW;
             case CRIMSON_VELVET: return ThemeAnimation.CRIMSON_WAVE;
@@ -1181,189 +1001,167 @@ public final class LocalDownloadsUIState {
 
     public static ThemeAnimation getCurrentAnimation() { return getAnimationForTheme(currentTheme); }
 
-    private static SharedPreferences effectsPrefs(Context ctx) {
-        return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
-    }
+    private static SharedPreferences effectsPrefs(Context ctx) { return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE); }
 
     public static boolean isEffectsMasterEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_EFFECTS_MASTER_KEY, true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_EFFECTS_MASTER_KEY, true); } catch (Exception ignored) { return true; }
     }
-
     public static void setEffectsMasterEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_EFFECTS_MASTER_KEY, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_EFFECTS_MASTER_KEY, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isLowPowerMode(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_LOW_POWER_MODE_KEY, false); }
-        catch (Exception ignored) { return false; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_LOW_POWER_MODE_KEY, false); } catch (Exception ignored) { return false; }
     }
-
     public static void setLowPowerMode(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_LOW_POWER_MODE_KEY, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_LOW_POWER_MODE_KEY, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isFocusMode(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_FOCUS_MODE_KEY, false); }
-        catch (Exception ignored) { return false; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_FOCUS_MODE_KEY, false); } catch (Exception ignored) { return false; }
     }
-
     public static void setFocusMode(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_FOCUS_MODE_KEY, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_FOCUS_MODE_KEY, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isHaloEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_HALO_ENABLED_KEY, true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_HALO_ENABLED_KEY, true); } catch (Exception ignored) { return true; }
     }
-
     public static void setHaloEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_HALO_ENABLED_KEY, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_HALO_ENABLED_KEY, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isVisualizerEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_VISUALIZER_ENABLED_KEY, false); }
-        catch (Exception ignored) { return false; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_VISUALIZER_ENABLED_KEY, false); } catch (Exception ignored) { return false; }
     }
-
     public static void setVisualizerEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_VISUALIZER_ENABLED_KEY, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_VISUALIZER_ENABLED_KEY, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isHaloEffectivelyEnabled(Context ctx) {
         return isEffectsMasterEnabled(ctx) && !isLowPowerMode(ctx) && isHaloEnabled(ctx);
     }
-
     public static float getAnimationSpeedScale(Context ctx) {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_ANIMATION_SPEED_KEY, DEFAULT_ANIMATION_SPEED);
             return Math.max(MIN_ANIMATION_SPEED, Math.min(MAX_ANIMATION_SPEED, v));
         } catch (Exception ignored) { return DEFAULT_ANIMATION_SPEED; }
     }
-
     public static void setAnimationSpeedScale(Context ctx, float v) {
         try {
             float clamped = Math.max(MIN_ANIMATION_SPEED, Math.min(MAX_ANIMATION_SPEED, v));
             effectsPrefs(ctx).edit().putFloat(PREF_ANIMATION_SPEED_KEY, clamped).apply();
         } catch (Exception ignored) {}
     }
-
     public static float getAnimationIntensity(Context ctx) {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_ANIMATION_INTENSITY_KEY, DEFAULT_ANIMATION_INTENSITY);
             return Math.max(MIN_ANIMATION_INTENSITY, Math.min(MAX_ANIMATION_INTENSITY, v));
         } catch (Exception ignored) { return DEFAULT_ANIMATION_INTENSITY; }
     }
-
     public static void setAnimationIntensity(Context ctx, float v) {
         try {
             float clamped = Math.max(MIN_ANIMATION_INTENSITY, Math.min(MAX_ANIMATION_INTENSITY, v));
             effectsPrefs(ctx).edit().putFloat(PREF_ANIMATION_INTENSITY_KEY, clamped).apply();
         } catch (Exception ignored) {}
     }
-
     public static long scaleDuration(Context ctx, long baseMs) {
         float scale = getAnimationSpeedScale(ctx);
         if (scale <= 0f) scale = 1f;
         long scaled = Math.round(baseMs / scale);
         return Math.max(40L, scaled);
     }
-
     public static boolean isPlayerCoverBreathingEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean("player_cover_breathing", true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_cover_breathing", true); } catch (Exception ignored) { return true; }
     }
-
     public static boolean isPlayerDynamicColorsEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean("player_dynamic_artwork_colors", true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_dynamic_artwork_colors", true); } catch (Exception ignored) { return true; }
     }
-
     public static boolean isPlayerCinematicTransitionsEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean("player_cinematic_transitions", true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean("player_cinematic_transitions", true); } catch (Exception ignored) { return true; }
     }
-
     public static boolean isCrossfadeEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_CROSSFADE_ENABLED, false); }
-        catch (Exception ignored) { return false; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_CROSSFADE_ENABLED, false); } catch (Exception ignored) { return false; }
     }
-
     public static void setCrossfadeEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_CROSSFADE_ENABLED, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_CROSSFADE_ENABLED, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static int getCrossfadeSeconds(Context ctx) {
-        try { return effectsPrefs(ctx).getInt(PREF_CROSSFADE_SECONDS, 5); }
-        catch (Exception ignored) { return 5; }
+        try { return effectsPrefs(ctx).getInt(PREF_CROSSFADE_SECONDS, 5); } catch (Exception ignored) { return 5; }
     }
-
     public static void setCrossfadeSeconds(Context ctx, int seconds) {
-        try { effectsPrefs(ctx).edit().putInt(PREF_CROSSFADE_SECONDS, seconds).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putInt(PREF_CROSSFADE_SECONDS, seconds).apply(); } catch (Exception ignored) {}
     }
-
     public static boolean isSleepFadeEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_SLEEP_FADE_ENABLED, true); }
-        catch (Exception ignored) { return true; }
+        try { return effectsPrefs(ctx).getBoolean(PREF_SLEEP_FADE_ENABLED, true); } catch (Exception ignored) { return true; }
     }
-
     public static void setSleepFadeEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_SLEEP_FADE_ENABLED, enabled).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_SLEEP_FADE_ENABLED, enabled).apply(); } catch (Exception ignored) {}
     }
-
     public static BackgroundColorMode getBackgroundColorMode(Context ctx) {
         try {
             String raw = effectsPrefs(ctx).getString(PREF_BG_COLOR_MODE_KEY, BackgroundColorMode.THEME.name());
             return BackgroundColorMode.valueOf(raw);
         } catch (Exception ignored) { return BackgroundColorMode.THEME; }
     }
-
     public static void setBackgroundColorMode(Context ctx, BackgroundColorMode mode) {
-        try {
-            effectsPrefs(ctx).edit().putString(PREF_BG_COLOR_MODE_KEY, (mode == null ? BackgroundColorMode.THEME : mode).name()).apply();
-        } catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putString(PREF_BG_COLOR_MODE_KEY, (mode == null ? BackgroundColorMode.THEME : mode).name()).apply(); } catch (Exception ignored) {}
     }
-
     public static int getCustomGradientColor1(Context ctx) {
-        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR1_KEY, DEFAULT_CUSTOM_COLOR1); }
-        catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR1; }
+        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR1_KEY, DEFAULT_CUSTOM_COLOR1); } catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR1; }
     }
-
     public static void setCustomGradientColor1(Context ctx, int color) {
-        try { effectsPrefs(ctx).edit().putInt(PREF_CUSTOM_COLOR1_KEY, color).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putInt(PREF_CUSTOM_COLOR1_KEY, color).apply(); } catch (Exception ignored) {}
     }
-
     public static int getCustomGradientColor2(Context ctx) {
-        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR2_KEY, DEFAULT_CUSTOM_COLOR2); }
-        catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR2; }
+        try { return effectsPrefs(ctx).getInt(PREF_CUSTOM_COLOR2_KEY, DEFAULT_CUSTOM_COLOR2); } catch (Exception ignored) { return DEFAULT_CUSTOM_COLOR2; }
     }
-
     public static void setCustomGradientColor2(Context ctx, int color) {
-        try { effectsPrefs(ctx).edit().putInt(PREF_CUSTOM_COLOR2_KEY, color).apply(); }
-        catch (Exception ignored) {}
+        try { effectsPrefs(ctx).edit().putInt(PREF_CUSTOM_COLOR2_KEY, color).apply(); } catch (Exception ignored) {}
     }
-
     public static float getGradientVibrancy(Context ctx) {
         try {
             float v = effectsPrefs(ctx).getFloat(PREF_VIBRANCY_KEY, DEFAULT_VIBRANCY);
             return Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, v));
         } catch (Exception ignored) { return DEFAULT_VIBRANCY; }
     }
-
     public static void setGradientVibrancy(Context ctx, float v) {
         try {
             float clamped = Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, v));
             effectsPrefs(ctx).edit().putFloat(PREF_VIBRANCY_KEY, clamped).apply();
         } catch (Exception ignored) {}
+    }
+
+    // ==== YENİ: EQ / BassBoost / Hız / Hız Limiti yardımcıları ====
+
+    public static boolean isEqEnabled(Context ctx) {
+        try { return effectsPrefs(ctx).getBoolean(PREF_EQ_ENABLED, false); } catch (Exception ignored) { return false; }
+    }
+    public static void setEqEnabled(Context ctx, boolean v) {
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_EQ_ENABLED, v).apply(); } catch (Exception ignored) {}
+    }
+    public static boolean isBassBoostEnabled(Context ctx) {
+        try { return effectsPrefs(ctx).getBoolean(PREF_EQ_BASS_ENABLED, false); } catch (Exception ignored) { return false; }
+    }
+    public static void setBassBoostEnabled(Context ctx, boolean v) {
+        try { effectsPrefs(ctx).edit().putBoolean(PREF_EQ_BASS_ENABLED, v).apply(); } catch (Exception ignored) {}
+    }
+    public static int getBassBoostStrength(Context ctx) {
+        try { return effectsPrefs(ctx).getInt(PREF_EQ_BASS_STRENGTH, 500); } catch (Exception ignored) { return 500; }
+    }
+    public static void setBassBoostStrength(Context ctx, int v) {
+        try { effectsPrefs(ctx).edit().putInt(PREF_EQ_BASS_STRENGTH, Math.max(0, Math.min(1000, v))).apply(); } catch (Exception ignored) {}
+    }
+    public static float getPlaybackSpeed(Context ctx) {
+        try { return effectsPrefs(ctx).getFloat(PREF_PLAYBACK_SPEED, 1.0f); } catch (Exception ignored) { return 1.0f; }
+    }
+    public static void setPlaybackSpeed(Context ctx, float v) {
+        try {
+            float clamped = Math.max(0.5f, Math.min(2.0f, v));
+            effectsPrefs(ctx).edit().putFloat(PREF_PLAYBACK_SPEED, clamped).apply();
+        } catch (Exception ignored) {}
+    }
+
+    public static int getRateLimitKbps(Context ctx) {
+        try { return effectsPrefs(ctx).getInt(PREF_DOWNLOAD_RATE_LIMIT, 0); } catch (Exception ignored) { return 0; }
+    }
+    public static void setRateLimitKbps(Context ctx, int kbps) {
+        try { effectsPrefs(ctx).edit().putInt(PREF_DOWNLOAD_RATE_LIMIT, Math.max(0, kbps)).apply(); } catch (Exception ignored) {}
     }
 
     public static int applyVibrancy(int color, float vibrancy) {
@@ -1388,8 +1186,7 @@ public final class LocalDownloadsUIState {
         switch (mode) {
             case COVER: {
                 int dominant = track != null ? track.extractDominantColor(currentTheme.varAccentPrimary) : currentTheme.varAccentPrimary;
-                int complement = complementOf(dominant);
-                base = buildCustomGradient(dominant, complement);
+                base = buildCustomGradient(dominant, complementOf(dominant));
                 break;
             }
             case CUSTOM: base = buildCustomGradient(getCustomGradientColor1(ctx), getCustomGradientColor2(ctx)); break;
@@ -1439,7 +1236,6 @@ public final class LocalDownloadsUIState {
                     BackgroundColorMode mode;
                     try { mode = BackgroundColorMode.valueOf(o.optString("colorMode", BackgroundColorMode.THEME.name())); }
                     catch (Exception e) { mode = BackgroundColorMode.THEME; }
-
                     out.add(new EffectProfile(
                             o.optString("name", ""), o.optString("themeName", ThemePalette.YT_MUSIC_PINK.name()),
                             o.optBoolean("dynamicColors", true), o.optBoolean("breathing", true),

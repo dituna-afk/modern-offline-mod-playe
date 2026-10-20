@@ -28,6 +28,12 @@ public final class OfflineHeaderBlocker {
     private static final Map<View, SavedViewState> HIDDEN_VIEWS = new IdentityHashMap<>();
     private static final Map<View, Boolean> HOOKED_DOWNLOAD_TABS = new IdentityHashMap<>();
 
+    /**
+     * YT Music'in "İndirilenler" çipine art arda iki kez basılmasını
+     * engelleyen zaman damgası. Double-tap koruması için kullanılır.
+     */
+    private static long lastDownloadsTabTapMs = 0L;
+
     private static ViewTreeObserver.OnGlobalLayoutListener offlineLayoutListener;
     private static ViewTreeObserver.OnGlobalLayoutListener onlineInterceptorListener;
     private static View observedDecor;
@@ -88,6 +94,18 @@ public final class OfflineHeaderBlocker {
         }
     }
 
+    /**
+     * "İndirilenler" çipini bulup, tıklama sırasında YT Music'in kendi
+     * onTouch davranışını tamamen yutar ve doğrudan Offline fragment'ı açar.
+     *
+     * <p><b>Double-tap koruması:</b> Aynı çipe 400ms içinde ikinci kez
+     * dokunulursa ikinci dokunuş sessizce yutulur. Bu, kullanıcı arayüzünün
+     * yanlışlıkla iki kez açılmasını engeller.</p>
+     *
+     * <p><b>Güvenlik:</b> ACTION_DOWN, ACTION_MOVE, ACTION_CANCEL ve
+     * ACTION_UP durumları eksiksiz yakalanır. ACTION_MOVE sırasında YT Music'in
+     * kaydırma hareketi başlatması imkansız hale gelir.</p>
+     */
     private static void hookOnlineDownloadsButtons(Activity activity, ViewGroup root) {
         for (int i = 0; i < root.getChildCount(); i++) {
             View child = root.getChildAt(i);
@@ -110,7 +128,24 @@ public final class OfflineHeaderBlocker {
                             v.setSelected(false);
                             return true;
                         }
+                        if (action == MotionEvent.ACTION_MOVE) {
+                            // YT Music'in kaydırma / tıklama girişimini tamamen yut
+                            return true;
+                        }
+                        if (action == MotionEvent.ACTION_CANCEL) {
+                            v.setPressed(false);
+                            v.setSelected(false);
+                            return true;
+                        }
                         if (action == MotionEvent.ACTION_UP) {
+                            long now = System.currentTimeMillis();
+                            if (now - lastDownloadsTabTapMs < 400L) {
+                                // Double-tap koruması — ikinci tıklamayı sessizce yut
+                                v.setPressed(false);
+                                v.setSelected(false);
+                                return true;
+                            }
+                            lastDownloadsTabTapMs = now;
                             v.setPressed(false);
                             v.setSelected(false);
                             clearOnlineDownloadsChipSelection(activity);
