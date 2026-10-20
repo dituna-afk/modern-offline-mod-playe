@@ -95,7 +95,7 @@ public final class LocalDownloadsDialogs {
         pTypeLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 8));
         playerTypeBtn.setLayoutParams(pTypeLp);
         sheet.addView(playerTypeBtn);
-        
+
         playerTypeBtn.setOnClickListener(v -> {
             String[] items = {"📱 Normal Oynatıcı", "✨ Oynatıcı 2 (Faye Tarzı)"};
             LocalDownloadsUIState.showMenu(activity, playerTypeBtn, items, LocalDownloadsUIState.isPlayer2FayeSelected(activity) ? 1 : 0, pos -> {
@@ -357,15 +357,15 @@ public final class LocalDownloadsDialogs {
         sheet.addView(secColor);
 
         addColorPickerRow(activity, sheet, "Arka Plan Rengi (Üst)", LocalDownloadsUIState.currentTheme.varBgTop, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(LocalDownloadsUIState.currentTheme, color, 0);
+            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 0);
             LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
         });
         addColorPickerRow(activity, sheet, "Ana Vurgu Rengi (Mor)", LocalDownloadsUIState.currentTheme.varAccentPrimary, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(LocalDownloadsUIState.currentTheme, color, 1);
+            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 1);
             LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
         });
         addColorPickerRow(activity, sheet, "İkincil Vurgu Rengi (Sarı/Altın)", LocalDownloadsUIState.currentTheme.varAccentSecondary, color -> {
-            LocalDownloadsUIState.currentTheme = changeThemeColor(LocalDownloadsUIState.currentTheme, color, 2);
+            LocalDownloadsUIState.currentTheme = changeThemeColor(activity, LocalDownloadsUIState.currentTheme, color, 2);
             LocalDownloadsUIState.refreshAllThemeVisuals(fragment);
         });
 
@@ -409,6 +409,11 @@ public final class LocalDownloadsDialogs {
         // Sıfırla Butonu
         TextView resetBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Varsayılan Faye Ayarlarına Dön", false);
         resetBtn.setOnClickListener(v -> {
+            // Enum sabiti mutasyonla üretildiği için önce fabrika değerlerine döndür,
+            // sonra prefs'teki özel renk anahtarlarını sil. Aksi hâlde uygulama yeniden
+            // başladığında eski renkler geri yüklenirdi.
+            LocalDownloadsUIState.ThemePalette.resetFayeDefaults();
+            LocalDownloadsUIState.clearFayeCustomColors(activity);
             LocalDownloadsUIState.currentTheme = LocalDownloadsUIState.ThemePalette.FAYE;
             LocalDownloadsUIState.savePreferences(activity);
             activity.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE).edit()
@@ -440,13 +445,22 @@ public final class LocalDownloadsDialogs {
         LocalDownloadsAnimator.animateBottomSheetShow(sheet, overlay, screenH);
     }
 
-    private static LocalDownloadsUIState.ThemePalette changeThemeColor(LocalDownloadsUIState.ThemePalette theme, int newColor, int type) {
-        switch (type) {
-            case 0: return new LocalDownloadsUIState.ThemePalette(theme.label, newColor, theme.varBgMid, theme.varBgBottom, theme.varAccentPrimary, theme.varAccentSecondary, theme.varGlassSurface, theme.varGlassBorder, theme.varOnAccent);
-            case 1: return new LocalDownloadsUIState.ThemePalette(theme.label, theme.varBgTop, theme.varBgMid, theme.varBgBottom, newColor, theme.varAccentSecondary, theme.varGlassSurface, theme.varGlassBorder, theme.varOnAccent);
-            case 2: return new LocalDownloadsUIState.ThemePalette(theme.label, theme.varBgTop, theme.varBgMid, theme.varBgBottom, theme.varAccentPrimary, newColor, theme.varGlassSurface, theme.varGlassBorder, theme.varOnAccent);
-            default: return theme;
-        }
+    /**
+     * Faye paletinin bir rengini runtime'da değiştirir.
+     *
+     * <p><b>ÖNEMLİ:</b> {@code ThemePalette} bir enum olduğu için {@code new ThemePalette(...)}
+     * çağrısı derleme hatası verir ("enum classes may not be instantiated"). Bu yüzden
+     * renk güncellemesi enum sabitinin <i>alanlarını mutasyona uğratarak</i> yapılır. Değişiklik
+     * {@link LocalDownloadsUIState#saveFayeCustomColor} üzerinden SharedPreferences'a yazılır
+     * ve uygulama yeniden başlatıldığında geri yüklenir.</p>
+     *
+     * @param type 0 = bgTop, 1 = accentPrimary, 2 = accentSecondary
+     */
+    private static LocalDownloadsUIState.ThemePalette changeThemeColor(
+            Context ctx, LocalDownloadsUIState.ThemePalette theme, int newColor, int type) {
+        if (theme == null) theme = LocalDownloadsUIState.ThemePalette.FAYE;
+        LocalDownloadsUIState.saveFayeCustomColor(ctx, type, newColor);
+        return theme;
     }
 
     private interface ColorPickListener { void onPicked(int color); }
@@ -1479,7 +1493,7 @@ public final class LocalDownloadsDialogs {
         LinearLayout actions = new LinearLayout(activity);
         actions.setGravity(Gravity.END);
         actions.setPadding(0, LocalDownloadsUIState.dp(activity, 16), 0, 0);
-        
+
         TextView cancelBtn = LocalDownloadsUIState.createPillButton(activity, "İptal", false);
         TextView saveBtn = LocalDownloadsUIState.createPillButton(activity, "💾 Kaydet", true);
         LinearLayout.LayoutParams sLp = new LinearLayout.LayoutParams(-2, -2);
@@ -1497,10 +1511,10 @@ public final class LocalDownloadsDialogs {
             String newTitle = titleInput.getText().toString().trim();
             String newArtist = artistInput.getText().toString().trim();
             String newAlbum = albumInput.getText().toString().trim();
-            
+
             if (newTitle.isEmpty()) { Utils.showToastShort("Şarkı adı boş olamaz"); return; }
             boolean success = track.updateMetadata(musicRoot, newTitle, newArtist, newAlbum);
-            
+
             if (success) {
                 LocalDownloadsUIState.TRACK_CACHE.clear();
                 LocalDownloadsUIState.diskReloadNeeded = true;

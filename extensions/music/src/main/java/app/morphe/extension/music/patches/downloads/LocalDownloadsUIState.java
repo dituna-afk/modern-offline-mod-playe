@@ -113,6 +113,11 @@ public final class LocalDownloadsUIState {
     // GÖREV 2: Oynatıcı Seçimi (0 = Normal, 1 = Faye)
     public static final String PREF_PLAYER_TYPE_KEY = "selected_player_type";
 
+    // GÖREV 3: Faye özel renk kalıcılığı (renk seçici diyalogları için)
+    public static final String PREF_FAYE_BG_TOP_KEY = "faye_custom_bg_top";
+    public static final String PREF_FAYE_ACCENT_PRIMARY_KEY = "faye_custom_accent_primary";
+    public static final String PREF_FAYE_ACCENT_SECONDARY_KEY = "faye_custom_accent_secondary";
+
     public static final String PREF_EFFECTS_MASTER_KEY = "player_effects_master_enabled";
     public static final String PREF_ANIMATION_SPEED_KEY = "player_animation_speed_scale";
     public static final String PREF_ANIMATION_INTENSITY_KEY = "player_animation_intensity";
@@ -147,7 +152,7 @@ public final class LocalDownloadsUIState {
 
     public static final LruCache<String, Bitmap> ARTWORK_CACHE = new LruCache<>(90);
     public static final Map<String, CachedTrackEntry> TRACK_CACHE = new ConcurrentHashMap<>();
-    
+
     // GÖREV 7: Sanatçı listesini her seferinde hesaplamak yerine önbelleğe alıyoruz (Performans)
     private static List<String> cachedArtists = null;
 
@@ -184,6 +189,16 @@ public final class LocalDownloadsUIState {
         }
     }
 
+    /**
+     * Tema paletleri.
+     *
+     * <p><b>ÖNEMLİ:</b> Enum sabitleri normalde değiştirilemez ({@code final} alanlar).
+     * Ancak Faye teması için renk seçici diyaloğundan renkleri runtime'da değiştirebilmek
+     * istiyoruz. Bu yüzden renk alanlarını {@code final} olmaktan çıkardık. Enum sabiti
+     * kimliği (referans) hâlâ tekil kalır; sadece o sabitin <i>içindeki</i> renk int'leri
+     * mutate edilebilir. Java'da {@code new ThemePalette(...)} çağrısı <b>derleme hatası</b>
+     * verdiği için mutasyon yaklaşımı zorunludur.</p>
+     */
     public enum ThemePalette {
         YT_MUSIC_PINK("YT Müzik Pembe Tema", Color.parseColor("#24071C"), Color.parseColor("#140410"), Color.parseColor("#090208"), Color.parseColor("#FF2A70"), Color.parseColor("#FF6E9E"), Color.argb(42, 255, 180, 215), Color.argb(75, 255, 80, 145), Color.parseColor("#FFFFFF")),
         AMOLED_NIGHT("AMOLED Gece", Color.parseColor("#0A0A0C"), Color.parseColor("#040406"), Color.parseColor("#000000"), Color.parseColor("#FF2A70"), Color.parseColor("#00E5FF"), Color.argb(36, 255, 255, 255), Color.argb(60, 255, 255, 255), Color.parseColor("#FFFFFF")),
@@ -196,12 +211,29 @@ public final class LocalDownloadsUIState {
         FAYE("Cowboy Bebop • Faye", Color.parseColor("#35164A"), Color.parseColor("#1B0D2B"), Color.parseColor("#090511"), Color.parseColor("#C77DFF"), Color.parseColor("#FFD166"), Color.argb(46, 199, 125, 255), Color.argb(92, 255, 209, 102), Color.parseColor("#21112E"));
 
         public final String label;
-        public final int varBgTop, varBgMid, varBgBottom, varAccentPrimary, varAccentSecondary, varGlassSurface, varGlassBorder, varOnAccent;
+        // DİKKAT: Faye renk seçicisi için bu alanlar artık final DEĞİL (mutasyon için).
+        public int varBgTop, varBgMid, varBgBottom, varAccentPrimary, varAccentSecondary,
+                   varGlassSurface, varGlassBorder, varOnAccent;
 
         ThemePalette(String label, int varBgTop, int varBgMid, int varBgBottom, int varAccentPrimary, int varAccentSecondary, int varGlassSurface, int varGlassBorder, int varOnAccent) {
             this.label = label; this.varBgTop = varBgTop; this.varBgMid = varBgMid; this.varBgBottom = varBgBottom;
             this.varAccentPrimary = varAccentPrimary; this.varAccentSecondary = varAccentSecondary;
             this.varGlassSurface = varGlassSurface; this.varGlassBorder = varGlassBorder; this.varOnAccent = varOnAccent;
+        }
+
+        /**
+         * Faye paletini fabrika değerlerine döndürür. Renk seçici diyaloğundaki
+         * "Varsayılan Faye Ayarlarına Dön" butonundan çağrılır.
+         */
+        public static void resetFayeDefaults() {
+            FAYE.varBgTop          = Color.parseColor("#35164A");
+            FAYE.varBgMid          = Color.parseColor("#1B0D2B");
+            FAYE.varBgBottom       = Color.parseColor("#090511");
+            FAYE.varAccentPrimary  = Color.parseColor("#C77DFF");
+            FAYE.varAccentSecondary= Color.parseColor("#FFD166");
+            FAYE.varGlassSurface   = Color.argb(46, 199, 125, 255);
+            FAYE.varGlassBorder    = Color.argb(92, 255, 209, 102);
+            FAYE.varOnAccent       = Color.parseColor("#21112E");
         }
     }
 
@@ -211,7 +243,7 @@ public final class LocalDownloadsUIState {
     public static boolean swipeToPlayNext = true;
     public static boolean showingPlaylistsOverview = true;
     public static boolean showingArtists = false;
-    
+
     @Nullable public static String selectedArtist = null;
     public static SmartFilterMode currentSmartFilter = SmartFilterMode.NONE;
     public static FilterMode currentFilterMode = FilterMode.ALL;
@@ -283,7 +315,65 @@ public final class LocalDownloadsUIState {
             customWallpaperActive = false;
             swipeToPlayNext = true;
         }
+        // Faye özel renk kalıcılığını geri yükle (varsa)
+        loadFayeCustomColors(context);
         reloadCustomWallpaper(musicRoot);
+    }
+
+    /**
+     * Faye teması için kullanıcının özelleştirdiği renkleri prefs'ten yükler.
+     * Uygulama süreci her başladığında enum sabitleri fabrika değerine döner;
+     * bu metot en son kaydedilen özel renkleri geri uygular.
+     */
+    public static void loadFayeCustomColors(Context context) {
+        if (context == null) return;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+            if (prefs.contains(PREF_FAYE_BG_TOP_KEY)) {
+                ThemePalette.FAYE.varBgTop = prefs.getInt(PREF_FAYE_BG_TOP_KEY, ThemePalette.FAYE.varBgTop);
+            }
+            if (prefs.contains(PREF_FAYE_ACCENT_PRIMARY_KEY)) {
+                ThemePalette.FAYE.varAccentPrimary = prefs.getInt(PREF_FAYE_ACCENT_PRIMARY_KEY, ThemePalette.FAYE.varAccentPrimary);
+            }
+            if (prefs.contains(PREF_FAYE_ACCENT_SECONDARY_KEY)) {
+                ThemePalette.FAYE.varAccentSecondary = prefs.getInt(PREF_FAYE_ACCENT_SECONDARY_KEY, ThemePalette.FAYE.varAccentSecondary);
+            }
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Renk seçici diyaloğundan çağrılır. Faye enum alanını mutate eder ve
+     * değeri kalıcı hale getirir.
+     *
+     * @param type 0 = bgTop, 1 = accentPrimary, 2 = accentSecondary
+     */
+    public static void saveFayeCustomColor(Context context, int type, int color) {
+        switch (type) {
+            case 0 -> ThemePalette.FAYE.varBgTop = color;
+            case 1 -> ThemePalette.FAYE.varAccentPrimary = color;
+            case 2 -> ThemePalette.FAYE.varAccentSecondary = color;
+            default -> { return; }
+        }
+        if (context == null) return;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE);
+            String key = type == 0 ? PREF_FAYE_BG_TOP_KEY
+                    : type == 1 ? PREF_FAYE_ACCENT_PRIMARY_KEY
+                    : PREF_FAYE_ACCENT_SECONDARY_KEY;
+            prefs.edit().putInt(key, color).apply();
+        } catch (Exception ignored) {}
+    }
+
+    /** Faye özel renklerini prefs'ten siler (varsayılana dön için). */
+    public static void clearFayeCustomColors(Context context) {
+        if (context == null) return;
+        try {
+            context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE).edit()
+                    .remove(PREF_FAYE_BG_TOP_KEY)
+                    .remove(PREF_FAYE_ACCENT_PRIMARY_KEY)
+                    .remove(PREF_FAYE_ACCENT_SECONDARY_KEY)
+                    .apply();
+        } catch (Exception ignored) {}
     }
 
     public static void reloadCustomWallpaper(File musicRoot) {
@@ -383,7 +473,7 @@ public final class LocalDownloadsUIState {
             LocalDownloadsHeader.refreshBottomNavigationTheme(ctx);
         }
         if (fragment != null) fragment.showTracks();
-        
+
         LocalDownloadsPlayer.updateDynamicPlayerColors(ctx);
     }
 
@@ -923,7 +1013,7 @@ public final class LocalDownloadsUIState {
         }
         playlists = OfflineStorage.loadPlaylists(musicRoot);
         if (selectedPlaylist != null && findPlaylist(selectedPlaylist) == null) selectedPlaylist = null;
-        
+
         // Sanatçı önbelleğini geçersiz kıl (yeniden yükleme yapıldı)
         invalidateArtistCache();
     }
