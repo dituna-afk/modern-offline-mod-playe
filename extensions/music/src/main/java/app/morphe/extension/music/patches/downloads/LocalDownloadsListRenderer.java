@@ -701,7 +701,7 @@ public final class LocalDownloadsListRenderer {
     }
 
     public static ImageView buildPlaylistCoverImageView(Context ctx, OfflineStorage.Playlist pl, int sizePx, int cornerDp) {
-        ImageView iv = LocalDownloadsUIState.artworkView(ctx, null, cornerDp);
+        final ImageView iv = LocalDownloadsUIState.artworkView(ctx, null, cornerDp);
         final String cacheKey = "pl_cover_" + pl.name() + "_" + pl.coverPath() + "_" + pl.videoIds().size() + "_" + sizePx + "_" + cornerDp;
         iv.setTag(cacheKey);
 
@@ -715,52 +715,50 @@ public final class LocalDownloadsListRenderer {
         }
 
         final OfflineStorage.Playlist fPl = pl;
-        final ImageView fIv = iv;
         final int fSize = sizePx;
 
-        Utils.submitOnBackgroundThread(new Runnable() {
-            @Override public void run() {
-                Bitmap result = null;
-                if (fPl.coverPath() != null && !fPl.coverPath().isEmpty()) {
-                    File coverFile = new File(fPl.coverPath());
-                    if (coverFile.isFile()) result = OfflineStorage.decodeArtwork(coverFile, fSize);
-                }
-                if (result == null) {
-                    List<Bitmap> tiles = new ArrayList<>(4);
-                    for (String id : fPl.videoIds()) {
-                        OfflineTrack t = LocalDownloadsUIState.findById(id);
-                        if (t != null) {
-                            Bitmap b = t.artwork(fSize / 2 + 32);
-                            if (b != null) tiles.add(b);
-                        }
-                        if (tiles.size() >= 4) break;
+        // DÜZELTME: submitOnBackgroundThread bir değer döndüren lambda (Callable) beklediği için
+        // geleneksel Runnable yerine lambda kullanıldı ve sonuna return null; eklendi.
+        Utils.submitOnBackgroundThread(() -> {
+            Bitmap result = null;
+            if (fPl.coverPath() != null && !fPl.coverPath().isEmpty()) {
+                File coverFile = new File(fPl.coverPath());
+                if (coverFile.isFile()) result = OfflineStorage.decodeArtwork(coverFile, fSize);
+            }
+            if (result == null) {
+                List<Bitmap> tiles = new ArrayList<>(4);
+                for (String id : fPl.videoIds()) {
+                    OfflineTrack t = LocalDownloadsUIState.findById(id);
+                    if (t != null) {
+                        Bitmap b = t.artwork(fSize / 2 + 32);
+                        if (b != null) tiles.add(b);
                     }
-                    if (tiles.size() >= 4) {
-                        result = Bitmap.createBitmap(fSize, fSize, Bitmap.Config.ARGB_8888);
-                        Canvas c = new Canvas(result);
-                        int half = fSize / 2;
-                        Rect[] dsts = { new Rect(0, 0, half, half), new Rect(half, 0, fSize, half), new Rect(0, half, half, fSize), new Rect(half, half, fSize, fSize) };
-                        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
-                        for (int i = 0; i < 4; i++) c.drawBitmap(tiles.get(i), null, dsts[i], p);
-                    } else if (!tiles.isEmpty()) {
-                        result = tiles.get(0);
-                    }
+                    if (tiles.size() >= 4) break;
                 }
-                if (result != null) {
-                    final Bitmap finalBmp = result;
-                    LocalDownloadsUIState.ARTWORK_CACHE.put(cacheKey, finalBmp);
-                    Utils.runOnMainThread(new Runnable() {
-                        @Override public void run() {
-                            if (cacheKey.equals(fIv.getTag())) {
-                                fIv.clearColorFilter();
-                                fIv.setPadding(0, 0, 0, 0);
-                                fIv.setImageBitmap(finalBmp);
-                                fIv.setScaleType(ImageView.ScaleType.CENTER_CROP);
-                            }
-                        }
-                    });
+                if (tiles.size() >= 4) {
+                    result = Bitmap.createBitmap(fSize, fSize, Bitmap.Config.ARGB_8888);
+                    Canvas c = new Canvas(result);
+                    int half = fSize / 2;
+                    Rect[] dsts = { new Rect(0, 0, half, half), new Rect(half, 0, fSize, half), new Rect(0, half, half, fSize), new Rect(half, half, fSize, fSize) };
+                    Paint p = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+                    for (int i = 0; i < 4; i++) c.drawBitmap(tiles.get(i), null, dsts[i], p);
+                } else if (!tiles.isEmpty()) {
+                    result = tiles.get(0);
                 }
             }
+            if (result != null) {
+                final Bitmap finalBmp = result;
+                LocalDownloadsUIState.ARTWORK_CACHE.put(cacheKey, finalBmp);
+                Utils.runOnMainThread(() -> {
+                    if (cacheKey.equals(iv.getTag())) {
+                        iv.clearColorFilter();
+                        iv.setPadding(0, 0, 0, 0);
+                        iv.setImageBitmap(finalBmp);
+                        iv.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                    }
+                });
+            }
+            return null;
         });
         return iv;
     }
