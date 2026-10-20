@@ -16,19 +16,11 @@ import java.util.regex.Pattern;
 
 import app.morphe.extension.shared.Logger;
 
-/**
- * Tek bir çevrimdışı şarkının temsili.
- * Meta verileri (başlık, sanatçı, albüm, süre, dinlenme sayısı) <videoId>.json
- * dosyasında saklar. Kapak resmi olarak önce <videoId>_custom.jpg (kullanıcı
- * değiştirdiyse), yoksa <videoId>.jpg dosyasını kullanır. Şarkı sözleri
- * <videoId>.lrc dosyasından zaman damgalı LyricLine listesi olarak okunur.
- */
 public final class OfflineTrack {
 
     private static final Pattern LRC_TIMESTAMP =
             Pattern.compile("\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\](.*)");
 
-    /** Zaman damgalı bir şarkı sözü satırı. */
     public record LyricLine(long timeMs, String text) {}
 
     private final File audioFile;
@@ -41,6 +33,12 @@ public final class OfflineTrack {
     private long lastPlayedAt;
     private int playCount;
     private int nightPlayCount;
+    
+    // YENİ: Zengin Meta Veriler
+    private String releaseYear;
+    private String genre;
+    private String label;
+    private String credits;
 
     private OfflineTrack(File audioFile) {
         this.audioFile = audioFile;
@@ -51,6 +49,10 @@ public final class OfflineTrack {
         this.artist = "";
         this.album = "";
         this.durationSeconds = 0;
+        this.releaseYear = "";
+        this.genre = "";
+        this.label = "";
+        this.credits = "";
     }
 
     public static OfflineTrack load(File audioFile) {
@@ -77,6 +79,12 @@ public final class OfflineTrack {
             lastPlayedAt = json.optLong("lastPlayedAt", 0L);
             playCount = json.optInt("playCount", 0);
             nightPlayCount = json.optInt("nightPlayCount", 0);
+            
+            // Yeni alanlar
+            releaseYear = json.optString("releaseYear", "");
+            genre = json.optString("genre", "");
+            label = json.optString("label", "");
+            credits = json.optString("credits", "");
         } catch (Exception ex) {
             Logger.printDebug(() -> "Could not read track metadata: " + videoId, ex);
         }
@@ -93,6 +101,13 @@ public final class OfflineTrack {
             json.put("lastPlayedAt", lastPlayedAt);
             json.put("playCount", playCount);
             json.put("nightPlayCount", nightPlayCount);
+            
+            // Yeni alanlar
+            json.put("releaseYear", releaseYear == null ? "" : releaseYear);
+            json.put("genre", genre == null ? "" : genre);
+            json.put("label", label == null ? "" : label);
+            json.put("credits", credits == null ? "" : credits);
+            
             OfflineStorage.writeText(metadataFile(), json.toString());
         } catch (Exception ex) {
             Logger.printException(() -> "Could not write track metadata: " + videoId, ex);
@@ -127,6 +142,15 @@ public final class OfflineTrack {
         } catch (Exception ex) {
             Logger.printException(() -> "Could not save track metadata: " + videoId, ex);
         }
+    }
+
+    // YENİ: YT Music'ten çekilen zengin meta verileri kaydeder
+    public void setExtendedMetadata(String year, String genre, String label, String credits) {
+        this.releaseYear = year == null ? "" : year;
+        this.genre = genre == null ? "" : genre;
+        this.label = label == null ? "" : label;
+        this.credits = credits == null ? "" : credits;
+        writeMetadata();
     }
 
     public static void recordPlayEvent(File audioFile, boolean isNight) {
@@ -164,8 +188,13 @@ public final class OfflineTrack {
     public long lastPlayedAt() { return lastPlayedAt; }
     public int playCount() { return playCount; }
     public int nightPlayCount() { return nightPlayCount; }
+    
+    // Yeni alanların getter'ları
+    public String releaseYear() { return releaseYear == null || releaseYear.isBlank() ? "Bilinmiyor" : releaseYear; }
+    public String genre() { return genre == null || genre.isBlank() ? "Bilinmiyor" : genre; }
+    public String label() { return label == null || label.isBlank() ? "Bilinmiyor" : label; }
+    public String credits() { return credits == null || credits.isBlank() ? "Bilinmiyor" : credits; }
 
-    // GÖREV 6: Şarkı süresini formatlı döndürme
     public String formattedDuration() {
         if (durationSeconds <= 0) return "--:--";
         return String.format(Locale.ROOT, "%d:%02d", durationSeconds / 60, durationSeconds % 60);

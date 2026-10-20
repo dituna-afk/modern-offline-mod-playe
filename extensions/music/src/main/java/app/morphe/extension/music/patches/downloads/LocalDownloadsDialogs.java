@@ -218,6 +218,11 @@ public final class LocalDownloadsDialogs {
 
         addSettingsActionItem(activity, sheet, "📡 Sık Dinlenenleri Otomatik İndirme Ayarları (" + (autoWifi ? threshold + " Dinleme • " + (wifiOnly ? "Wi-Fi" : "Mobil+Wi-Fi") : "KAPALI") + ")", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showAutoDownloadConfigDialog(activity, fragment)));
 
+        // YENİ: Kütüphane Toplu İndirme Butonu
+        addSettingsActionItem(activity, sheet, "📚 Hesabımdaki Tüm Kütüphaneyi Toplu İndir", () ->
+                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () ->
+                        LocalDownloadManager.fetchAndDownloadLibrary(musicRoot)));
+
         int rateLimit = LocalDownloadsUIState.getRateLimitKbps(activity);
         String rateLabel = rateLimit <= 0 ? "Sınırsız" : rateLimit + " KB/sn";
         addSettingsActionItem(activity, sheet, "🚀 İndirme Hız Limiti: " + rateLabel, () ->
@@ -238,7 +243,7 @@ public final class LocalDownloadsDialogs {
         swipeToggleLp.setMargins(0, 0, 0, LocalDownloadsUIState.dp(activity, 6));
         sheet.addView(swipeNextToggle, swipeToggleLp);
 
-        addSettingsActionItem(activity, sheet, "🎤 Şarkı Sözleri & DeepL Çeviri Merkezi", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showLyricsLibraryDialog(activity, fragment)));
+        addSettingsActionItem(activity, sheet, "🎤 Şarkı Sözleri & Yapay Zeka Çeviri Merkezi", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showLyricsLibraryDialog(activity, fragment)));
         addSettingsActionItem(activity, sheet, "⬇️ İndirme Kuyruğu Yöneticisini Aç (" + LocalDownloadManager.getTotalQueueCount() + ")", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showDownloadManagerDialog(activity, fragment)));
 
         addSettingsActionItem(activity, sheet, "🧹 Görsel & Meta Veri Önbelleğini Temizle (RAM/LruCache)", () -> {
@@ -293,7 +298,6 @@ public final class LocalDownloadsDialogs {
         LocalDownloadsAnimator.animateBottomSheetShow(sheet, overlay, screenH);
     }
 
-    // ==== YENİ: HEX renk girme diyaloğu ====
     public static void showHexColorInputDialog(Activity activity, boolean isAccent, LocalDownloadsFragment fragment) {
         if (activity == null) return;
         LinearLayout box = new LinearLayout(activity);
@@ -355,7 +359,6 @@ public final class LocalDownloadsDialogs {
         dialog.show();
     }
 
-    // ==== YENİ: Ekolayzer + Bass + Hız diyaloğu ====
     public static void showEqualizerDialog(Activity activity) {
         if (activity == null) return;
         LinearLayout box = new LinearLayout(activity);
@@ -464,7 +467,6 @@ public final class LocalDownloadsDialogs {
         dialog.show();
     }
 
-    // ==== YENİ: İndirme hız limiti diyaloğu ====
     public static void showRateLimitDialog(Activity activity) {
         if (activity == null) return;
         LinearLayout box = new LinearLayout(activity);
@@ -914,7 +916,7 @@ public final class LocalDownloadsDialogs {
         panel.setPadding(LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 16), LocalDownloadsUIState.dp(activity, 14));
         panel.setBackground(LocalDownloadsUIState.bottomSheetSurfaceDrawable(activity));
 
-        TextView title = LocalDownloadsUIState.text(activity, "🎤 Söz & DeepL Çeviri Merkezi", 17, LocalDownloadsUIState.primaryTextColor());
+        TextView title = LocalDownloadsUIState.text(activity, "🎤 Söz & Yapay Zeka Çeviri Merkezi", 17, LocalDownloadsUIState.primaryTextColor());
         title.setTypeface(Typeface.DEFAULT_BOLD);
         panel.addView(title);
 
@@ -998,7 +1000,7 @@ public final class LocalDownloadsDialogs {
 
                 boolean unavailable = prefs.getBoolean("lyrics_lookup_failed_" + track.videoId(), false);
                 String state = isNativeTr ? "📖 Türkçe Şiir / Orijinal Söz Hazır (Çevirisiz)"
-                        : (hasTr ? "✓ Orijinal + Türkçe Çeviri Hazır (DeepL)"
+                        : (hasTr ? "✓ Orijinal + Türkçe Çeviri Hazır (AI/DeepL)"
                         : (hasLrc ? "◐ Söz var · Türkçe çeviri yok"
                         : (unavailable ? "— Tam eşleşme bulunamadı (Elle aramak için dokun)" : "○ Henüz indirilmedi")));
 
@@ -1345,7 +1347,7 @@ public final class LocalDownloadsDialogs {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(title);
 
-        TextView info = LocalDownloadsUIState.text(act, "Boş bırakırsan ücretsiz DeepL Web RPC kullanılır. Kendi DeepL Free (:fx) veya Pro anahtarın varsa buraya girebilirsin.", 12, LocalDownloadsUIState.secondary());
+        TextView info = LocalDownloadsUIState.text(act, "Yapay Zeka çeviri motorunu seçtiyseniz anahtara gerek yoktur. DeepL için kendi anahtarınızı girebilirsiniz.", 12, LocalDownloadsUIState.secondary());
         info.setPadding(0, LocalDownloadsUIState.dp(act, 4), 0, LocalDownloadsUIState.dp(act, 10));
         box.addView(info);
 
@@ -1434,6 +1436,13 @@ public final class LocalDownloadsDialogs {
         albumInput.setHintTextColor(LocalDownloadsUIState.secondary());
         albumInput.setSingleLine(true);
         box.addView(albumInput, inputLp);
+        
+        // YENİ: Yıl, Tür, Şirket, Credits Bilgileri (Sadece Görüntüleme)
+        TextView metaInfo = LocalDownloadsUIState.text(activity, 
+            "Yıl: " + track.releaseYear() + " | Tür: " + track.genre() + "\nŞirket: " + track.label() + "\nEmeği Geçenler: " + track.credits(), 
+            12, LocalDownloadsUIState.secondary());
+        metaInfo.setPadding(0, LocalDownloadsUIState.dp(activity, 8), 0, LocalDownloadsUIState.dp(activity, 8));
+        box.addView(metaInfo);
 
         LinearLayout actions = new LinearLayout(activity);
         actions.setGravity(Gravity.END);
@@ -1925,7 +1934,7 @@ public final class LocalDownloadsDialogs {
     }
 
     private static void showTrackInfoDialog(Activity act, OfflineTrack cur) {
-        String info = "Başlık: " + cur.displayTitle() + "\nSanatçı: " + cur.displayArtist() + "\nAlbüm: " + cur.displayAlbum() + "\nSüre: " + LocalDownloadsUIState.formatDuration(cur.durationSeconds()) + "\nBoyut: " + LocalDownloadsUIState.formatSize(cur.audioFile().length()) + " MB\nVideo ID: " + cur.videoId();
+        String info = "Başlık: " + cur.displayTitle() + "\nSanatçı: " + cur.displayArtist() + "\nAlbüm: " + cur.displayAlbum() + "\nYıl: " + cur.releaseYear() + "\nTür: " + cur.genre() + "\nŞirket: " + cur.label() + "\nSüre: " + LocalDownloadsUIState.formatDuration(cur.durationSeconds()) + "\nBoyut: " + LocalDownloadsUIState.formatSize(cur.audioFile().length()) + " MB\nVideo ID: " + cur.videoId();
         CustomDialog.create(act, "Şarkı Bilgisi & Jenerik", info, null, "Tamam", () -> {}, null, null, null, false).first.show();
     }
 

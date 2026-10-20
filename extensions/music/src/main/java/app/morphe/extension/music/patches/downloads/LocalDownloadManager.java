@@ -86,6 +86,7 @@ public final class LocalDownloadManager {
     }
 
     public enum TranslationEngine {
+        AI_LLM("Yapay Zeka (Bağlam Duyarlı)"),
         DEEPL("DeepL Çeviri (Gelişmiş)"),
         GOOGLE_GTX("Google Çeviri (Hızlı)");
 
@@ -341,7 +342,6 @@ public final class LocalDownloadManager {
             if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId)) {
                 throw new InterruptedException("Cancelled while paused");
             }
-            //noinspection BusyWait
             Thread.sleep(350);
         }
     }
@@ -362,7 +362,6 @@ public final class LocalDownloadManager {
 
     public static void enqueue(String videoId, @Nullable String targetPlaylistName, boolean showToasts) {
         if (videoId == null || !VIDEO_ID.matcher(videoId).matches()) {
-            Logger.printDebug(() -> "Refusing to download an unusable id: " + videoId);
             if (showToasts) Utils.showToastShort(str("morphe_music_downloads_unknown_track"));
             return;
         }
@@ -438,8 +437,8 @@ public final class LocalDownloadManager {
     public static TranslationEngine getSavedTranslationEngine() {
         try {
             SharedPreferences sp = Utils.getContext().getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE);
-            return TranslationEngine.valueOf(sp.getString("preferred_translation_engine", TranslationEngine.DEEPL.name()));
-        } catch (Exception ignored) { return TranslationEngine.DEEPL; }
+            return TranslationEngine.valueOf(sp.getString("preferred_translation_engine", TranslationEngine.AI_LLM.name()));
+        } catch (Exception ignored) { return TranslationEngine.AI_LLM; }
     }
 
     public static void setSavedTranslationEngine(TranslationEngine engine) {
@@ -705,7 +704,6 @@ public final class LocalDownloadManager {
     private static String fetchFromSelectedSource(LyricsSource source, String videoId, String cleanTitle, String cleanArtist, int durationSeconds) {
         String content = null;
 
-        // YENİ: Önce YouTube Music'in resmi sözlerini dene
         if (source == LyricsSource.YOUTUBE_MUSIC || source == LyricsSource.AUTO_ALL) {
             try { content = tryFetchYtMusicLyrics(videoId); } catch (Exception ignored) {}
             if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
@@ -768,10 +766,6 @@ public final class LocalDownloadManager {
         return (content != null && !isGibberishOrCorruptedLyrics(content)) ? content : null;
     }
 
-    /**
-     * YENİ: YouTube Music InnerTube API üzerinden resmi şarkı sözlerini çeker.
-     * YT Music'te bir şarkının sözleri varsa "Lyrics" sekmesinde JSON olarak döner.
-     */
     @Nullable
     private static String tryFetchYtMusicLyrics(String videoId) {
         if (videoId == null || videoId.isBlank()) return null;
@@ -782,12 +776,9 @@ public final class LocalDownloadManager {
             if (response == null || response.isEmpty()) return null;
 
             JSONObject root = new JSONObject(response);
-            
-            // Önce derinlemesine söz araması yap (musicDescriptionShelfRenderer arar)
             String lyrics = deepSearchLyrics(root);
             if (lyrics != null && !lyrics.isBlank()) return lyrics;
 
-            // Eğer doğrudan bulunamadıysa devam (continuation) veya browseId araması yapalım
             String continuation = findFirstContinuationForLyrics(root);
             if (continuation != null) {
                 String contPayload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20240101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"continuation\":\"" + continuation + "\"}";
@@ -807,7 +798,6 @@ public final class LocalDownloadManager {
                     if (browseLyrics != null && !browseLyrics.isBlank()) return browseLyrics;
                 }
             }
-            
             return null;
         } catch (Exception e) {
             Logger.printDebug(() -> "YT Music lyrics fetch failed for " + videoId, e);
@@ -816,12 +806,48 @@ public final class LocalDownloadManager {
     }
 
     /**
-     * JSON ağacında şarkı sözü metnini (musicDescriptionShelfRenderer) bulur.
+     * YENİ: YT Music üzerinden Albüm, Yıl, Tür, Şirket ve Credits çeker.
      */
+    @Nullable
+    private static JSONObject tryFetchYtMusicMetadata(String videoId) {
+        try {
+            String endpoint = "https://music.youtube.com/youtubei/v1/next?prettyPrint=false";
+            String payload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20240101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"videoId\":\"" + videoId + "\"}";
+            String response = postInnerTubeJson(endpoint, payload);
+            if (response == null || response.isEmpty()) return null;
+
+            JSONObject root = new JSONObject(response);
+            String jsonStr = root.toString();
+
+            String year = "", genre = "", label = "", credits = "";
+            
+            // Basit regex tabanlı ayıklama (Karmaşık ağaç yapısında daha hızlı)
+            Matcher mYear = Pattern.compile("\"(\\d{4})\"\\s*,?\\s*\"musicInlineBadgeRenderer\"").matcher(jsonStr);
+            if (mYear.find()) year = mYear.group(1);
+
+            Matcher mLabel = Pattern.compile("\"recordLabel\"\\s*:\\s*\"([^\"]+)\"").matcher(jsonStr);
+            if (mLabel.find()) label = mLabel.group(1);
+
+            Matcher mGenre = Pattern.compile("\"genre\"\\s*:\\s*\"([^\"]+)\"").matcher(jsonStr);
+            if (mGenre.find()) genre = mGenre.group(1);
+            
+            Matcher mCredits = Pattern.compile("\"credits\"\\s*:\\s*\\[\\s*\\{\\s*\"text\"\\s*:\\s*\"([^\"]+)\"").matcher(jsonStr);
+            if (mCredits.find()) credits = mCredits.group(1);
+
+            JSONObject meta = new JSONObject();
+            meta.put("year", year);
+            meta.put("genre", genre);
+            meta.put("label", label);
+            meta.put("credits", credits);
+            return meta;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     @Nullable
     private static String deepSearchLyrics(JSONObject obj) {
         if (obj == null) return null;
-        
         if (obj.has("musicDescriptionShelfRenderer")) {
             JSONObject shelf = obj.optJSONObject("musicDescriptionShelfRenderer");
             if (shelf != null) {
@@ -829,7 +855,6 @@ public final class LocalDownloadManager {
                 if (description != null) {
                     String text = description.optString("simpleText", "");
                     if (!text.isEmpty()) return text.trim();
-                    
                     JSONArray runs = description.optJSONArray("runs");
                     if (runs != null) {
                         StringBuilder sb = new StringBuilder();
@@ -842,7 +867,6 @@ public final class LocalDownloadManager {
                 }
             }
         }
-
         java.util.Iterator<String> keys = obj.keys();
         while (keys.hasNext()) {
             String key = keys.next();
@@ -1263,8 +1287,15 @@ public final class LocalDownloadManager {
         StringBuilder batch = new StringBuilder();
         for (String line : originalLines) batch.append(line == null ? "" : line).append("\n");
         String translatedBatch = "";
-        if (engine == TranslationEngine.DEEPL) translatedBatch = doTranslateDeepL(batch.toString(), deeplKey);
+        
+        if (engine == TranslationEngine.AI_LLM) {
+            translatedBatch = doTranslateLlm(batch.toString());
+        } else if (engine == TranslationEngine.DEEPL) {
+            translatedBatch = doTranslateDeepL(batch.toString(), deeplKey);
+        }
+        
         if (translatedBatch.isBlank()) translatedBatch = doTranslateGoogleGtx(batch.toString());
+        
         String[] batchLines = translatedBatch.split("\\r?\\n");
         if (!translatedBatch.isBlank() && batchLines.length == originalLines.size()) {
             for (int i = 0; i < batchLines.length; i++) result[i] = batchLines[i].trim();
@@ -1275,12 +1306,69 @@ public final class LocalDownloadManager {
             if (line == null || line.isBlank()) {
                 result[i] = "";
             } else {
-                String tr = (engine == TranslationEngine.DEEPL) ? doTranslateDeepL(line.trim(), deeplKey) : "";
+                String tr = "";
+                if (engine == TranslationEngine.AI_LLM) tr = doTranslateLlm(line.trim());
+                else if (engine == TranslationEngine.DEEPL) tr = doTranslateDeepL(line.trim(), deeplKey);
+                
                 if (tr.isBlank()) tr = doTranslateGoogleGtx(line.trim());
                 result[i] = tr;
             }
         }
         return result;
+    }
+
+    /**
+     * YENİ: Yapay Zeka (Llama 3) ile tüm sözleri bağlamıyla beraber çevirir.
+     */
+    private static String doTranslateLlm(String text) {
+        if (text == null || text.isBlank()) return "";
+        HttpURLConnection conn = null;
+        try {
+            // Ücretsiz Pollinations AI API'si
+            conn = (HttpURLConnection) new java.net.URL("https://text.pollinations.ai/").openConnection();
+            conn.setRequestMethod("POST");
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(30000);
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            
+            JSONObject body = new JSONObject();
+            body.put("model", "openai");
+            JSONArray messages = new JSONArray();
+            
+            JSONObject sys = new JSONObject();
+            sys.put("role", "system");
+            sys.put("content", "Sen profesyonel bir şarkı sözü çevirmenisin. Sana verilen şarkı sözlerini İngilizceden Türkçeye çevireceksin. KURALLAR: 1. Şarkının ruhunu, bağlamını ve duygusunu koru. 2. Satır sayısını birebir koru (her satır bir satıra denk gelsin). 3. Eğer sözlerin başında zaman damgası [00:12.00] gibi ibareler varsa bunları aynen koru. 4. Sadece çevrilmiş metni döndür, başına veya sonuna hiçbir açıklama ekleme.");
+            messages.put(sys);
+            
+            JSONObject user = new JSONObject();
+            user.put("role", "user");
+            user.put("content", text);
+            messages.put(user);
+            
+            body.put("messages", messages);
+            
+            try (OutputStream os = conn.getOutputStream()) { os.write(body.toString().getBytes(StandardCharsets.UTF_8)); }
+            
+            if (conn.getResponseCode() == HttpURLConnection.HTTP_OK) {
+                String resp = readStreamToString(conn.getInputStream());
+                if (resp.trim().startsWith("{")) {
+                    try {
+                        JSONObject root = new JSONObject(resp);
+                        JSONArray choices = root.optJSONArray("choices");
+                        if (choices != null && choices.length() > 0) {
+                            return choices.optJSONObject(0).optJSONObject("message").optString("content", "").trim();
+                        }
+                    } catch (Exception ignored) {}
+                }
+                return resp.trim();
+            }
+        } catch (Exception e) {
+            Logger.printDebug(() -> "AI Translation failed", e);
+        } finally {
+            if (conn != null) conn.disconnect();
+        }
+        return "";
     }
 
     private static String doTranslateDeepL(String text, @Nullable String apiKey) {
@@ -1446,6 +1534,84 @@ public final class LocalDownloadManager {
                     }
                     if (fNotify && CANCEL_EPOCH.get() == epoch) Utils.runOnMainThread(() -> Utils.showToastShort("Oynatma listesi indirmesi tamamlandı"));
                 } catch (InterruptedException ignored) {
+                } finally {
+                    ACTIVE_PLAYLIST_JOBS.remove(jobKey);
+                    notifyListeners("", true);
+                }
+            }
+        });
+    }
+
+    /**
+     * YENİ: Kütüphanedeki (Beğenilenler, listeler, geçmiş) tüm şarkıları topluca çeker.
+     */
+    public static void fetchAndDownloadLibrary(File musicRoot) {
+        final String jobKey = "library_sync";
+        if (!ACTIVE_PLAYLIST_JOBS.add(jobKey)) {
+            Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane zaten taranıyor!"));
+            return;
+        }
+        final int epoch = CANCEL_EPOCH.get();
+        final File fMusicRoot = musicRoot;
+
+        PLAYLIST_QUEUE_EXECUTOR.submit(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (CANCEL_EPOCH.get() != epoch) return;
+                    Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane taranıyor, lütfen bekleyin..."));
+                    
+                    Set<String> allIds = new LinkedHashSet<>();
+                    // 1. Beğenilen Şarkılar
+                    fetchInnerTubeBrowseIds("VLLM", allIds, Integer.MAX_VALUE);
+                    if (allIds.isEmpty()) fetchInnerTubeBrowseIds("FEmusic_liked_videos", allIds, Integer.MAX_VALUE);
+                    // 2. Kullanıcının Çalma Listeleri (Eğer giriş yapıldıysa)
+                    Set<String> playlistIds = new LinkedHashSet<>();
+                    fetchInnerTubeBrowseIds("FEmusic_liked_playlists", playlistIds, 50); 
+                    for (String plId : playlistIds) {
+                        fetchInnerTubeBrowseIds(plId, allIds, Integer.MAX_VALUE);
+                    }
+
+                    if (allIds.isEmpty()) {
+                        Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphanenizde şarkı bulunamadı. Giriş yaptığınızdan emin olun."));
+                        return;
+                    }
+
+                    List<String> toDownload = new ArrayList<>();
+                    for (String id : allIds) {
+                        if (!OfflineStorage.isTrackDownloaded(fMusicRoot, id) && !QUEUE_MAP.containsKey(id)) {
+                            CANCELLED_IDS.remove(id);
+                            putQueueItem(id, id, "Kütüphane Toplu", 0, false, 0L, 0L, 0L);
+                            toDownload.add(id);
+                        }
+                    }
+                    saveQueuePersist();
+                    notifyListeners("", false);
+                    
+                    final int totalCount = toDownload.size();
+                    if (totalCount == 0) {
+                        Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphanenizdeki tüm şarkılar zaten indirilmiş!"));
+                        return;
+                    }
+
+                    Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphaneden " + totalCount + " yeni şarkı indiriliyor..."));
+                    
+                    int count = 0;
+                    for (final String id : toDownload) {
+                        if (CANCEL_EPOCH.get() != epoch) return;
+                        if (CANCELLED_IDS.remove(id)) { QUEUE_MAP.remove(id); continue; }
+                        awaitIfPaused(epoch, id);
+                        count++;
+                        final int index = count;
+                        showDownloadNotification("library_sync", "Kütüphane İndiriliyor", (index * 100) / totalCount, true, index + "/" + totalCount);
+                        downloadBlocking(epoch, id, null, null, null, 0, null, "Kütüphane Toplu", false);
+                    }
+                    
+                    if (CANCEL_EPOCH.get() == epoch) {
+                        Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane indirmesi tamamlandı! (" + totalCount + " şarkı)"));
+                    }
+                } catch (Exception ex) {
+                    Logger.printException(() -> "Library download failed", ex);
+                    Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane indirilirken hata oluştu."));
                 } finally {
                     ACTIVE_PLAYLIST_JOBS.remove(jobKey);
                     notifyListeners("", true);
@@ -1761,6 +1927,19 @@ public final class LocalDownloadManager {
             if (!temporary.renameTo(destination)) throw new IllegalStateException("Could not finish audio");
 
             OfflineTrack.save(directory, videoId, finalTitle, finalArtist, album, duration, artwork);
+            
+            // YENİ: Meta verileri YT Music'ten çek ve OfflineTrack'e kaydet
+            JSONObject ytMeta = tryFetchYtMusicMetadata(videoId);
+            if (ytMeta != null) {
+                OfflineTrack tr = OfflineTrack.load(destination);
+                tr.setExtendedMetadata(
+                        ytMeta.optString("year", ""),
+                        ytMeta.optString("genre", ""),
+                        ytMeta.optString("label", ""),
+                        ytMeta.optString("credits", "")
+                );
+            }
+
             fetchAndSaveSyncedLyrics(directory, videoId, finalTitle, finalArtist, duration);
             COMPLETED_SESSION_COUNT.incrementAndGet();
             FAILED_MAP.remove(videoId);
