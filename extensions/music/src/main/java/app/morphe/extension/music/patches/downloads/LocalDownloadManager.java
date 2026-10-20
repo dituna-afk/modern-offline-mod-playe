@@ -11,7 +11,6 @@ import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Environment;
-import android.text.Html;
 import android.webkit.CookieManager;
 
 import androidx.annotation.Nullable;
@@ -74,16 +73,18 @@ public final class LocalDownloadManager {
         void onProgress(int current, int total, int successCount);
     }
 
+    /**
+     * Söz kaynakları — SADECE iki ana kaynak:
+     *  - LRCLIB (senkronize söz, zaman damgalı)
+     *  - YouTube Music (resmi sözler, genelde düz metin)
+     *
+     * <p>Diğer sağlayıcılar (Genius, Musixmatch, Deezer, NetEase, Lyrics.ovh, Lyrist)
+     * güvenilir çalışmadığı için kaldırıldı.</p>
+     */
     public enum LyricsSource {
-        AUTO_ALL("Otomatik (YT Music + 3. Parti)"),
-        YOUTUBE_MUSIC("YouTube Music (Resmi Sözler)"),
-        GENIUS("Genius (Geniş Arşiv)"),
+        AUTO_ALL("Otomatik (LRCLIB → YT Music)"),
         LRCLIB("LRCLIB (Senkronize Söz)"),
-        MUSIXMATCH("Musixmatch (Doğrulanmış)"),
-        DEEZER("Deezer (Halka Açık API)"),
-        NETEASE("NetEase (Asya / Global)"),
-        LYRICS_OVH("Lyrics.ovh"),
-        LYRIST("Lyrist");
+        YOUTUBE_MUSIC("YouTube Music (Resmi Sözler)");
 
         public final String label;
         LyricsSource(String label) { this.label = label; }
@@ -151,11 +152,6 @@ public final class LocalDownloadManager {
     private static final Pattern SAPISID_PATTERN = Pattern.compile("(?:^|;\\s*)(?:__Secure-3PAPISID|SAPISID)=([^;]+)");
     private static final Pattern NON_QU_Q_PATTERN = Pattern.compile("(?i)q(?!u)");
 
-    private static final Pattern GENIUS_LYRICS_CONTAINER = Pattern.compile(
-            "data-lyrics-container=\"true\"[^>]*>(.*?)</div>", Pattern.DOTALL);
-    private static final Pattern GENIUS_LEGACY_LYRICS = Pattern.compile(
-            "class=\"lyrics\"[^>]*>(.*?)</p>", Pattern.DOTALL);
-
     private static final String THUMBNAIL_URL = "https://i.ytimg.com/vi/";
 
     private static final Set<String> ACTIVE_DOWNLOADS = ConcurrentHashMap.newKeySet();
@@ -166,8 +162,6 @@ public final class LocalDownloadManager {
     private static final AtomicInteger CANCEL_EPOCH = new AtomicInteger(0);
     private static final AtomicBoolean PAUSED = new AtomicBoolean(false);
     private static final AtomicInteger COMPLETED_SESSION_COUNT = new AtomicInteger(0);
-
-    @Nullable private static volatile String cachedMusixmatchToken = null;
 
     private LocalDownloadManager() {}
 
@@ -317,7 +311,7 @@ public final class LocalDownloadManager {
                 File musicRoot = new File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Morphe");
                 if (OfflineStorage.isTrackDownloaded(musicRoot, vid)) continue;
                 putQueueItem(vid, title, playlist, 0, false, 0L, 0L, 0L);
-                
+
                 SINGLE_DOWNLOAD_EXECUTOR.submit(new Runnable() {
                     @Override public void run() {
                         downloadBlocking(epoch, vid, title, null, null, 0, null, playlist, false);
@@ -509,7 +503,12 @@ public final class LocalDownloadManager {
         } catch (Exception ignored) {}
     }
 
-    public static int resetAllLyricsAndFetchFromYtMusic(File directory, List<OfflineTrack> tracks, @Nullable BulkLyricsProgressListener listener) {
+    /**
+     * Tüm .lrc dosyalarını siler ve AUTO_ALL (LRCLIB → YT Music) sırasına göre
+     * tüm şarkıların sözlerini yeniden çeker. Bulunanlar otomatik çevrilir.
+     */
+    public static int resetAllLyricsAndReFetch(File directory, List<OfflineTrack> tracks,
+                                               @Nullable BulkLyricsProgressListener listener) {
         if (directory == null || !directory.isDirectory()) return 0;
 
         File[] lrcFiles = directory.listFiles(f -> f.isFile() && f.getName().endsWith(".lrc"));
@@ -544,7 +543,7 @@ public final class LocalDownloadManager {
                         track.displayTitle(),
                         track.displayArtist(),
                         track.durationSeconds(),
-                        LyricsSource.YOUTUBE_MUSIC,
+                        LyricsSource.AUTO_ALL,       // LRCLIB → YT Music sırası
                         engine,
                         deeplKey,
                         true
@@ -806,17 +805,20 @@ public final class LocalDownloadManager {
         return sb.toString().trim();
     }
 
+    /**
+     * Seçilen kaynağa göre söz çeker.
+     *
+     * <p><b>Sıra:</b></p>
+     * <ol>
+     *   <li>LRCLIB (senkronize söz) — zaman damgalı, öncelikli</li>
+     *   <li>YouTube Music (resmi sözler) — yedek, genelde düz metin</li>
+     * </ol>
+     */
     @Nullable
     private static String fetchFromSelectedSource(LyricsSource source, String videoId, String cleanTitle, String cleanArtist, int durationSeconds) {
         String content = null;
 
-        if (source == LyricsSource.YOUTUBE_MUSIC || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchYtMusicLyrics(videoId); } catch (Exception ignored) {}
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.YOUTUBE_MUSIC) return null;
-        }
-
+        // 1) LRCLIB — senkronize söz, öncelikli kaynak
         if (source == LyricsSource.LRCLIB || source == LyricsSource.AUTO_ALL) {
             try { content = tryFetchLrclibExact(cleanTitle, cleanArtist, durationSeconds); } catch (Exception ignored) {}
             if (content == null || content.isBlank()) {
@@ -827,51 +829,23 @@ public final class LocalDownloadManager {
             if (source == LyricsSource.LRCLIB) return null;
         }
 
-        if (source == LyricsSource.MUSIXMATCH || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchMusixmatchStrict(cleanTitle, cleanArtist, durationSeconds); } catch (Exception ignored) {}
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.MUSIXMATCH) return null;
-        }
-
-        if (source == LyricsSource.DEEZER || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchDeezer(cleanTitle, cleanArtist); } catch (Exception ignored) {}
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.DEEZER) return null;
-        }
-
-        if (source == LyricsSource.NETEASE || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchNetEase(cleanTitle, cleanArtist); } catch (Exception ignored) {}
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.NETEASE) return null;
-        }
-
-        if (source == LyricsSource.GENIUS || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchGenius(cleanTitle, cleanArtist); } catch (Exception ignored) {}
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.GENIUS) return null;
-        }
-
-        if (source == LyricsSource.LYRICS_OVH || source == LyricsSource.AUTO_ALL) {
-            if (!cleanArtist.isBlank()) {
-                try { content = tryFetchLyricsOvh(cleanArtist, cleanTitle); } catch (Exception ignored) {}
-            }
-            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
-            content = null;
-            if (source == LyricsSource.LYRICS_OVH) return null;
-        }
-
-        if (source == LyricsSource.LYRIST || source == LyricsSource.AUTO_ALL) {
-            try { content = tryFetchLyrist(cleanTitle, cleanArtist); } catch (Exception ignored) {}
+        // 2) YouTube Music — yedek kaynak
+        if (source == LyricsSource.YOUTUBE_MUSIC || source == LyricsSource.AUTO_ALL) {
+            try { content = tryFetchYtMusicLyrics(videoId); } catch (Exception ignored) {}
             if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
         }
 
-        return (content != null && !isGibberishOrCorruptedLyrics(content)) ? content : null;
+        return null;
     }
 
+    /**
+     * YouTube Music sözlerini çeker.
+     *
+     * <p><b>Not:</b> YT Music'in {@code musicDescriptionShelfRenderer} alanı
+     * genellikle <b>düz metin</b> döner (zaman damgası yok). Bazı şarkılarda
+     * continuation veya MPLYt browse endpoint'i zamanlı veri döndürebilir ama
+     * bu garanti değildir. Zaman damgalı söz için LRCLIB öncelikli kaynaktır.</p>
+     */
     @Nullable
     private static String tryFetchYtMusicLyrics(String videoId) {
         if (videoId == null || videoId.isBlank()) return null;
@@ -923,7 +897,7 @@ public final class LocalDownloadManager {
             String jsonStr = root.toString();
 
             String year = "", genre = "", label = "", credits = "";
-            
+
             Matcher mYear = Pattern.compile("\"(\\d{4})\"\\s*,?\\s*\"musicInlineBadgeRenderer\"").matcher(jsonStr);
             if (mYear.find()) year = mYear.group(1);
 
@@ -932,7 +906,7 @@ public final class LocalDownloadManager {
 
             Matcher mGenre = Pattern.compile("\"genre\"\\s*:\\s*\"([^\"]+)\"").matcher(jsonStr);
             if (mGenre.find()) genre = mGenre.group(1);
-            
+
             Matcher mCredits = Pattern.compile("\"credits\"\\s*:\\s*\\[\\s*\\{\\s*\"text\"\\s*:\\s*\"([^\"]+)\"").matcher(jsonStr);
             if (mCredits.find()) credits = mCredits.group(1);
 
@@ -1052,210 +1026,6 @@ public final class LocalDownloadManager {
         return null;
     }
 
-    @Nullable
-    private static String tryFetchDeezer(String title, String artist) throws Exception {
-        if (title == null || title.isBlank()) return null;
-        String q = urlEncode(title + (artist != null && !artist.isBlank() ? " " + artist : ""));
-        String searchUrl = "https://api.deezer.com/search?q=" + q;
-        String res = httpGetText(searchUrl, "https://www.deezer.com/");
-        if (res == null) return null;
-        JSONObject json = new JSONObject(res);
-        JSONArray data = json.optJSONArray("data");
-        if (data == null || data.length() == 0) return null;
-        JSONObject track = data.optJSONObject(0);
-        if (track == null) return null;
-        String titleFound = track.optString("title", "");
-        if (!isLooseMetadataMatch(title, titleFound) && !isStrictMetadataMatch(title, artist, titleFound, "")) return null;
-        long id = track.optLong("id");
-        String lyricUrl = "https://api.deezer.com/track/" + id + "/lyrics";
-        String lyrRes = httpGetText(lyricUrl, "https://www.deezer.com/");
-        if (lyrRes == null) return null;
-        JSONObject lyrJson = new JSONObject(lyrRes);
-        String lyrics = lyrJson.optString("lyrics", "");
-        if (lyrics.isBlank()) return null;
-        return lyrics.replaceAll("\\*+\\s*Bu şarkı sözleri.*", "").replaceAll("\\*+\\s*This lyrics.*", "").trim();
-    }
-
-    @Nullable
-    private static String tryFetchNetEase(String title, String artist) throws Exception {
-        if (title == null || title.isBlank()) return null;
-        String q = urlEncode(title + (artist != null && !artist.isBlank() ? " " + artist : ""));
-        String searchUrl = "http://music.163.com/api/search/get/web?s=" + q + "&type=1&limit=1";
-        String res = httpGetText(searchUrl, "http://music.163.com/");
-        if (res == null) return null;
-        JSONObject json = new JSONObject(res);
-        JSONObject result = json.optJSONObject("result");
-        if (result == null) return null;
-        JSONArray songs = result.optJSONArray("songs");
-        if (songs == null || songs.length() == 0) return null;
-        JSONObject song = songs.optJSONObject(0);
-        if (song == null) return null;
-        String titleFound = song.optString("name", "");
-        if (!isLooseMetadataMatch(title, titleFound) && !isStrictMetadataMatch(title, artist, titleFound, "")) return null;
-        long id = song.optLong("id");
-        String lyricUrl = "http://music.163.com/api/song/lyric?id=" + id + "&lv=1&kv=1&tv=-1";
-        String lyrRes = httpGetText(lyricUrl, "http://music.163.com/");
-        if (lyrRes == null) return null;
-        JSONObject lyrJson = new JSONObject(lyrRes);
-        JSONObject lrc = lyrJson.optJSONObject("lrc");
-        if (lrc == null) return null;
-        String lyrics = lrc.optString("lyric", "");
-        if (lyrics.isBlank()) return null;
-        return lyrics;
-    }
-
-    @Nullable
-    private static String tryFetchMusixmatchStrict(String title, String artist, int durationSeconds) throws Exception {
-        if (title == null || title.isBlank()) return null;
-        if (cachedMusixmatchToken == null || cachedMusixmatchToken.isBlank()) {
-            String tokenUrl = "https://apic-desktop.musixmatch.com/ws/1.1/token.get?app_id=web-desktop-app-v1.0";
-            String tokenBody = httpGetText(tokenUrl, "https://www.musixmatch.com/");
-            if (tokenBody != null) {
-                JSONObject root = new JSONObject(tokenBody);
-                JSONObject body = root.optJSONObject("message") != null ? root.optJSONObject("message").optJSONObject("body") : null;
-                if (body != null) cachedMusixmatchToken = body.optString("user_token", null);
-            }
-        }
-        if (cachedMusixmatchToken == null || cachedMusixmatchToken.isBlank()) return null;
-
-        StringBuilder url = new StringBuilder("https://apic-desktop.musixmatch.com/ws/1.1/macro.subtitles.get")
-                .append("?format=json&namespace=lyrics_richsynched&subtitle_format=lrc&app_id=web-desktop-app-v1.0")
-                .append("&q_track=").append(urlEncode(title))
-                .append("&q_artist=").append(urlEncode(artist == null ? "" : artist))
-                .append("&usertoken=").append(urlEncode(cachedMusixmatchToken));
-        if (durationSeconds > 0) url.append("&q_duration=").append(durationSeconds);
-
-        String response = httpGetText(url.toString(), "https://www.musixmatch.com/");
-        if (response == null || response.isBlank()) return null;
-
-        JSONObject root = new JSONObject(response);
-        JSONObject message = root.optJSONObject("message");
-        if (message == null) return null;
-        JSONObject body = message.optJSONObject("body");
-        if (body == null) return null;
-        JSONObject macroCalls = body.optJSONObject("macro_calls");
-        if (macroCalls == null) return null;
-
-        JSONObject matcherTrack = macroCalls.optJSONObject("matcher.track.get");
-        if (matcherTrack != null) {
-            JSONObject mtMsg = matcherTrack.optJSONObject("message");
-            JSONObject mtBody = mtMsg != null ? mtMsg.optJSONObject("body") : null;
-            JSONObject trackObj = mtBody != null ? mtBody.optJSONObject("track") : null;
-            if (trackObj != null) {
-                String foundTrackName = trackObj.optString("track_name", "");
-                String foundArtistName = trackObj.optString("artist_name", "");
-                if (!isStrictMetadataMatch(title, artist, foundTrackName, foundArtistName) && !isLooseMetadataMatch(title, foundTrackName)) return null;
-            }
-        }
-
-        JSONObject subGet = macroCalls.optJSONObject("track.subtitles.get");
-        if (subGet != null) {
-            JSONObject subMsg = subGet.optJSONObject("message");
-            JSONObject subBody = subMsg != null ? subMsg.optJSONObject("body") : null;
-            JSONArray subList = subBody != null ? subBody.optJSONArray("subtitle_list") : null;
-            if (subList != null && subList.length() > 0) {
-                JSONObject subObj = subList.optJSONObject(0).optJSONObject("subtitle");
-                if (subObj != null) {
-                    String lrc = subObj.optString("subtitle_body", "").trim();
-                    if (!lrc.isBlank() && !isGibberishOrCorruptedLyrics(lrc)) return lrc;
-                }
-            }
-        }
-
-        JSONObject lyrGet = macroCalls.optJSONObject("track.lyrics.get");
-        if (lyrGet != null) {
-            JSONObject lyrMsg = lyrGet.optJSONObject("message");
-            JSONObject lyrBody = lyrMsg != null ? lyrMsg.optJSONObject("body") : null;
-            JSONObject lyrObj = lyrBody != null ? lyrBody.optJSONObject("lyrics") : null;
-            if (lyrObj != null) {
-                String plain = lyrObj.optString("lyrics_body", "");
-                if (!plain.isBlank()) {
-                    String cleaned = plain.replaceAll("\\*+\\s*This Lyrics is NOT for Commercial use.*", "").trim();
-                    if (!isGibberishOrCorruptedLyrics(cleaned)) return cleaned;
-                }
-            }
-        }
-        return null;
-    }
-
-    @Nullable
-    private static String tryFetchGenius(String title, String artist) {
-        if (title == null || title.isBlank()) return null;
-        try {
-            String query = title + (artist != null && !artist.isBlank() ? " " + artist : "");
-            String searchUrl = "https://genius.com/api/search/multi?per_page=5&q=" + urlEncode(query);
-            String searchBody = httpGetText(searchUrl, "https://genius.com/");
-            if (searchBody == null || searchBody.isBlank()) return null;
-
-            JSONObject root = new JSONObject(searchBody);
-            JSONObject response = root.optJSONObject("response");
-            if (response == null) return null;
-            JSONArray sections = response.optJSONArray("sections");
-            if (sections == null) return null;
-
-            String bestUrl = null;
-            for (int i = 0; i < sections.length(); i++) {
-                JSONObject section = sections.optJSONObject(i);
-                if (section == null || !"song".equals(section.optString("type", ""))) continue;
-                JSONArray hits = section.optJSONArray("hits");
-                if (hits == null) continue;
-
-                for (int j = 0; j < hits.length(); j++) {
-                    JSONObject hit = hits.optJSONObject(j);
-                    if (hit == null) continue;
-                    JSONObject result = hit.optJSONObject("result");
-                    if (result == null) continue;
-
-                    String resultTitle = result.optString("title", "");
-                    String resultArtist = "";
-                    JSONObject primaryArtist = result.optJSONObject("primary_artist");
-                    if (primaryArtist != null) resultArtist = primaryArtist.optString("name", "");
-                    String url = result.optString("url", "");
-                    if (url.isEmpty()) continue;
-
-                    if (isStrictMetadataMatch(title, artist, resultTitle, resultArtist) || isLooseMetadataMatch(title, resultTitle)) {
-                        bestUrl = url;
-                        break;
-                    }
-                }
-                if (bestUrl != null) break;
-            }
-
-            if (bestUrl == null) return null;
-            String pageHtml = httpGetText(bestUrl, "https://genius.com/");
-            if (pageHtml == null || pageHtml.isBlank()) return null;
-            return extractGeniusLyricsFromHtml(pageHtml);
-        } catch (Exception ignored) { return null; }
-    }
-
-    @Nullable
-    @SuppressWarnings("deprecation")
-    private static String extractGeniusLyricsFromHtml(String html) {
-        StringBuilder sb = new StringBuilder();
-        Matcher modern = GENIUS_LYRICS_CONTAINER.matcher(html);
-        while (modern.find()) {
-            String chunk = modern.group(1);
-            if (chunk == null) continue;
-            String cleaned = chunk.replaceAll("(?i)<br\\s*/?>", "\n").replaceAll("(?i)</p>", "\n").replaceAll("(?is)<script.*?</script>", "").replaceAll("(?is)<style.*?</style>", "");
-            sb.append(Html.fromHtml(cleaned).toString()).append("\n");
-        }
-
-        if (sb.length() == 0) {
-            Matcher legacy = GENIUS_LEGACY_LYRICS.matcher(html);
-            while (legacy.find()) {
-                String chunk = legacy.group(1);
-                if (chunk == null) continue;
-                sb.append(Html.fromHtml(chunk.replaceAll("(?i)<br\\s*/?>", "\n")).toString()).append("\n");
-            }
-        }
-
-        String result = sb.toString().trim();
-        if (result.isEmpty()) return null;
-        result = result.replaceAll("(?m)^\\[(?:Verse|Chorus|Bridge|Intro|Outro|Pre-Chorus|Hook)[^\\]]*\\]\\s*$", "").trim();
-        result = result.replaceAll("\\n{3,}", "\n\n");
-        return result.isBlank() ? null : result;
-    }
-
     private static boolean isStrictMetadataMatch(String queryTitle, String queryArtist, String resultTitle, String resultArtist) {
         if (resultTitle == null || resultTitle.isBlank()) return false;
         String qt = normalizeForMatch(queryTitle), rt = normalizeForMatch(resultTitle);
@@ -1328,33 +1098,6 @@ public final class LocalDownloadManager {
         return null;
     }
 
-    private static String tryFetchLyricsOvh(String artist, String title) throws IOException, org.json.JSONException {
-        if (artist == null || artist.isBlank() || title == null || title.isBlank()) return null;
-        String url = "https://api.lyrics.ovh/v1/" + urlEncodePath(artist) + "/" + urlEncodePath(title);
-        String body = httpGetText(url, "https://lyrics.ovh/");
-        if (body == null || body.isBlank()) return null;
-        JSONObject json = new JSONObject(body);
-        String lyrics = json.optString("lyrics", "");
-        return lyrics.isBlank() ? null : lyrics.trim();
-    }
-
-    private static String tryFetchLyrist(String title, String artist) throws IOException, org.json.JSONException {
-        if (title == null || title.isBlank()) return null;
-        String path = "https://lyrist.vercel.app/api/" + urlEncodePath(title);
-        if (artist != null && !artist.isBlank()) path += "/" + urlEncodePath(artist);
-        String body = httpGetText(path, "https://lyrist.vercel.app/");
-        if (body == null || body.isBlank()) return null;
-        String trimmed = body.trim();
-        if (trimmed.startsWith("{")) {
-            JSONObject json = new JSONObject(trimmed);
-            String lyrics = json.optString("lyrics", "");
-            if (lyrics.isBlank()) lyrics = json.optString("plainLyrics", "");
-            if (lyrics.isBlank()) lyrics = json.optString("syncedLyrics", "");
-            return lyrics.isBlank() ? null : lyrics.trim();
-        }
-        return trimmed.startsWith("[") ? null : trimmed;
-    }
-
     private static String urlEncode(String value) {
         try { return URLEncoder.encode(value == null ? "" : value, "UTF-8"); } catch (Exception ignored) { return value == null ? "" : value; }
     }
@@ -1389,15 +1132,15 @@ public final class LocalDownloadManager {
         StringBuilder batch = new StringBuilder();
         for (String line : originalLines) batch.append(line == null ? "" : line).append("\n");
         String translatedBatch = "";
-        
+
         if (engine == TranslationEngine.AI_LLM) {
             translatedBatch = doTranslateLlm(batch.toString());
         } else if (engine == TranslationEngine.DEEPL) {
             translatedBatch = doTranslateDeepL(batch.toString(), deeplKey);
         }
-        
+
         if (translatedBatch.isBlank()) translatedBatch = doTranslateGoogleGtx(batch.toString());
-        
+
         String[] batchLines = translatedBatch.split("\\r?\\n");
         if (!translatedBatch.isBlank() && batchLines.length == originalLines.size()) {
             for (int i = 0; i < batchLines.length; i++) result[i] = batchLines[i].trim();
@@ -1411,7 +1154,7 @@ public final class LocalDownloadManager {
                 String tr = "";
                 if (engine == TranslationEngine.AI_LLM) tr = doTranslateLlm(line.trim());
                 else if (engine == TranslationEngine.DEEPL) tr = doTranslateDeepL(line.trim(), deeplKey);
-                
+
                 if (tr.isBlank()) tr = doTranslateGoogleGtx(line.trim());
                 result[i] = tr;
             }
@@ -1460,7 +1203,7 @@ public final class LocalDownloadManager {
                     "1. SATIR SAYISI KORUNACAK: Girdi tam olarak " + lineCount + " satırdan oluşmaktadır. Çıktın da kesinlikle tam olarak " + lineCount + " satır olmalıdır. Satırları asla birleştirme, bölme, satır atlama veya fazladan satır ekleme. Boş satırları boş bırak.\n" +
                     "2. ZAMAN DAMGALARI KORUNACAK: Satır başlarında [00:12.00] gibi zaman damgaları varsa bunları salisesine kadar birebir koru, asla silme veya değiştirme.\n" +
                     "3. ŞARKI BAĞLAMI VE DUYGU: Kelimesi kelimesine robotik çeviri yapma; şarkının bütünlüğünü, metaforlarını, sokak dilini/argosunu ve duygusal tonunu koruyarak Türkçeye uyarla.\n" +
-                    "4. SADECE ÇEVİRİ DÖNDÜR: Çıktıda sadece çevrilmiş satırlar yer almalıdır. Baş에 veya sona açıklama, not, markdown kod bloğu (```) veya tırnak işareti kesinlikle ekleme."
+                    "4. SADECE ÇEVİRİ DÖNDÜR: Çıktıda sadece çevrilmiş satırlar yer almalıdır. Başta veya sona açıklama, not, markdown kod bloğu (```) veya tırnak işareti kesinlikle ekleme."
             );
             messages.put(sys);
 
@@ -1681,12 +1424,12 @@ public final class LocalDownloadManager {
                 try {
                     if (CANCEL_EPOCH.get() != epoch) return;
                     Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane taranıyor, lütfen bekleyin..."));
-                    
+
                     Set<String> allIds = new LinkedHashSet<>();
                     fetchInnerTubeBrowseIds("VLLM", allIds, Integer.MAX_VALUE);
                     if (allIds.isEmpty()) fetchInnerTubeBrowseIds("FEmusic_liked_videos", allIds, Integer.MAX_VALUE);
                     Set<String> playlistIds = new LinkedHashSet<>();
-                    fetchInnerTubeBrowseIds("FEmusic_liked_playlists", playlistIds, 50); 
+                    fetchInnerTubeBrowseIds("FEmusic_liked_playlists", playlistIds, 50);
                     for (String plId : playlistIds) {
                         fetchInnerTubeBrowseIds(plId, allIds, Integer.MAX_VALUE);
                     }
@@ -1706,7 +1449,7 @@ public final class LocalDownloadManager {
                     }
                     saveQueuePersist();
                     notifyListeners("", false);
-                    
+
                     final int totalCount = toDownload.size();
                     if (totalCount == 0) {
                         Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphanenizdeki tüm şarkılar zaten indirilmiş!"));
@@ -1714,7 +1457,7 @@ public final class LocalDownloadManager {
                     }
 
                     Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphaneden " + totalCount + " yeni şarkı indiriliyor..."));
-                    
+
                     int count = 0;
                     for (final String id : toDownload) {
                         if (CANCEL_EPOCH.get() != epoch) return;
@@ -1725,7 +1468,7 @@ public final class LocalDownloadManager {
                         showDownloadNotification("library_sync", "Kütüphane İndiriliyor", (index * 100) / totalCount, true, index + "/" + totalCount);
                         downloadBlocking(epoch, id, null, null, null, 0, null, "Kütüphane Toplu", false);
                     }
-                    
+
                     if (CANCEL_EPOCH.get() == epoch) {
                         Utils.runOnMainThread(() -> Utils.showToastShort("Kütüphane indirmesi tamamlandı! (" + totalCount + " şarkı)"));
                     }
@@ -2047,7 +1790,7 @@ public final class LocalDownloadManager {
             if (!temporary.renameTo(destination)) throw new IllegalStateException("Could not finish audio");
 
             OfflineTrack.save(directory, videoId, finalTitle, finalArtist, album, duration, artwork);
-            
+
             JSONObject ytMeta = tryFetchYtMusicMetadata(videoId);
             if (ytMeta != null) {
                 OfflineTrack tr = OfflineTrack.load(destination);

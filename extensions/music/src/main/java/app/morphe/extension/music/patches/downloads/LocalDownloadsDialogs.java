@@ -1061,7 +1061,8 @@ public final class LocalDownloadsDialogs {
             @Override public void afterTextChanged(android.text.Editable s) {}
         });
 
-        TextView resetYtBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Tüm Sözleri Sıfırla & YT Music'ten Çek", false);
+        // ==== Sıfırla & Yeniden Çek (LRCLIB → YT Music) ====
+        TextView resetYtBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Tüm Sözleri Sıfırla & Yeniden Çek", false);
         resetYtBtn.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(-1, -2);
         resetLp.setMargins(0, LocalDownloadsUIState.dp(activity, 8), 0, 0);
@@ -1099,24 +1100,29 @@ public final class LocalDownloadsDialogs {
         AlertDialog dialog = new AlertDialog.Builder(activity).setView(panel).create();
         close.setOnClickListener(v -> dialog.dismiss());
 
+        // ==== Tüm Sözleri Sıfırla & Yeniden Çek (LRCLIB → YT Music) ====
         resetYtBtn.setOnClickListener(v -> {
             new AlertDialog.Builder(activity)
-                    .setTitle("Tüm Sözleri Sıfırla & YT Music'ten Çek")
-                    .setMessage("Mevcut tüm .lrc dosyaları silinecek ve tüm şarkılar için SADECE YouTube Music resmi altyapısı kullanılarak sözler baştan indirilecek. Onaylıyor musunuz?")
+                    .setTitle("Tüm Sözleri Sıfırla & Yeniden Çek")
+                    .setMessage("Mevcut tüm .lrc dosyaları silinecek ve tüm şarkılar için sırasıyla:\n\n" +
+                            "1) LRCLIB (senkronize söz)\n" +
+                            "2) YouTube Music (resmi sözler)\n\n" +
+                            "kullanılarak sözler baştan indirilecek. Bulunan sözler otomatik olarak Türkçeye çevrilecek.\n\n" +
+                            "Onaylıyor musunuz?")
                     .setNegativeButton("İptal", null)
                     .setPositiveButton("Sıfırla ve Başlat", (d, w) -> {
                         resetYtBtn.setEnabled(false);
                         fetch.setEnabled(false);
-                        resetYtBtn.setText("⏳ Sıfırlanıyor ve YT Music taranıyor...");
+                        resetYtBtn.setText("⏳ Sıfırlanıyor ve LRCLIB → YT Music taranıyor...");
 
                         final List<OfflineTrack> snapshot = new ArrayList<>(LocalDownloadsUIState.tracks);
                         Utils.submitOnBackgroundThread(() -> {
-                            int okCount = LocalDownloadManager.resetAllLyricsAndFetchFromYtMusic(
+                            int okCount = LocalDownloadManager.resetAllLyricsAndReFetch(
                                     musicRoot,
                                     snapshot,
                                     (current, total, successCount) -> Utils.runOnMainThread(() -> {
                                         if (dialog.isShowing()) {
-                                            resetYtBtn.setText("⏳ YT Music (" + current + "/" + total + ") • Bulunan: " + successCount);
+                                            resetYtBtn.setText("⏳ Taranıyor (" + current + "/" + total + ") • Bulunan: " + successCount);
                                         }
                                     })
                             );
@@ -1130,9 +1136,9 @@ public final class LocalDownloadsDialogs {
                                 renderRef[0].run();
                                 resetYtBtn.setEnabled(true);
                                 fetch.setEnabled(true);
-                                resetYtBtn.setText("🔄 Tüm Sözleri Sıfırla & YT Music'ten Çek");
+                                resetYtBtn.setText("🔄 Tüm Sözleri Sıfırla & Yeniden Çek");
                                 fragment.showTracks();
-                                Utils.showToastShort("Tamamlandı! YT Music'ten " + okCount + " şarkı sözü indirildi.");
+                                Utils.showToastShort("Tamamlandı! " + okCount + " şarkı sözü bulundu.");
                             });
                             return null;
                         });
@@ -1177,7 +1183,7 @@ public final class LocalDownloadsDialogs {
                     fetch.setEnabled(true);
                     resetYtBtn.setEnabled(true);
                     fetch.setText("⚡ Eksikleri Bul");
-                    Utils.showToastShort("Tamamlandı! " + finalFound + " yeni söz eklendi.");
+                    Utils.showToastShort("Tamamlandı! " + finalFound + " yeni söz bulundu ve kaydedildi.");
                 });
                 return null;
             });
@@ -1378,9 +1384,9 @@ public final class LocalDownloadsDialogs {
                     dialog.dismiss();
                     if (ok) {
                         act.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE).edit().remove("lyrics_lookup_failed_" + track.videoId()).apply();
-                        Utils.showToastShort("✓ Söz / Şiir başarıyla kaydedildi!");
+                        Utils.showToastShort("✓ Söz bulundu ve kaydedildi!");
                     } else {
-                        Utils.showToastShort("Tam eşleşen söz bulunamadı. '📝 Yapıştır' ile elle ekleyebilirsin.");
+                        Utils.showToastShort("LRCLIB ve YouTube Music'te söz bulunamadı. '📝 Yapıştır' ile elle ekleyebilirsin.");
                     }
                     if (onComplete != null) onComplete.run();
                 });
@@ -1556,9 +1562,9 @@ public final class LocalDownloadsDialogs {
         albumInput.setHintTextColor(LocalDownloadsUIState.secondary());
         albumInput.setSingleLine(true);
         box.addView(albumInput, inputLp);
-        
-        TextView metaInfo = LocalDownloadsUIState.text(activity, 
-            "Yıl: " + track.releaseYear() + " | Tür: " + track.genre() + "\nŞirket: " + track.label() + "\nEmeği Geçenler: " + track.credits(), 
+
+        TextView metaInfo = LocalDownloadsUIState.text(activity,
+            "Yıl: " + track.releaseYear() + " | Tür: " + track.genre() + "\nŞirket: " + track.label() + "\nEmeği Geçenler: " + track.credits(),
             12, LocalDownloadsUIState.secondary());
         metaInfo.setPadding(0, LocalDownloadsUIState.dp(activity, 8), 0, LocalDownloadsUIState.dp(activity, 8));
         box.addView(metaInfo);
@@ -1707,6 +1713,33 @@ public final class LocalDownloadsDialogs {
         addBottomSheetListRow(activity, sheet, "✏️", "Şarkı Bilgilerini / Kapağı Düzenle", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showEditTrackMetadataDialog(activity, track, fragment)));
         addBottomSheetListRow(activity, sheet, "🔍", "Söz / Türkçe Şiir Elle Ara", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showManualLyricsSearchDialog(activity, track, null, fragment)));
         addBottomSheetListRow(activity, sheet, "📝", "Söz / Şiir Yapıştır / Düzenle", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showManualLyricsPasteDialog(activity, track, null, fragment)));
+
+        // ==== YENİ: Sözleri Sil & Yeniden Çek (LRCLIB → YT Music) ====
+        addBottomSheetListRow(activity, sheet, "🔄", "Sözleri Sil & Yeniden Çek (LRCLIB → YT)", () ->
+                LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> {
+                    File lrcFile = new File(musicRoot, track.videoId() + ".lrc");
+                    if (lrcFile.isFile()) OfflineStorage.delete(lrcFile);
+                    Utils.showToastShort("Sözler silindi, LRCLIB → YT Music sırasıyla yeniden aranıyor...");
+                    Utils.submitOnBackgroundThread(() -> {
+                        boolean found = LocalDownloadManager.fetchAndSaveSyncedLyrics(
+                                musicRoot,
+                                track.videoId(),
+                                track.displayTitle(),
+                                track.displayArtist(),
+                                track.durationSeconds());
+                        LocalDownloadsUIState.TRACK_CACHE.clear();
+                        LocalDownloadsUIState.diskReloadNeeded = true;
+                        Utils.runOnMainThread(() -> {
+                            if (found) {
+                                Utils.showToastShort("✓ Söz bulundu ve kaydedildi!");
+                            } else {
+                                Utils.showToastShort("LRCLIB ve YouTube Music'te söz bulunamadı. '📝 Yapıştır' ile elle ekleyebilirsin.");
+                            }
+                            fragment.showTracks();
+                        });
+                        return null;
+                    });
+                }));
 
         if (LocalDownloadsUIState.selectedPlaylist != null && !OfflineStorage.SPECIAL_ALL_SONGS.equalsIgnoreCase(LocalDownloadsUIState.selectedPlaylist)) {
             addBottomSheetListRow(activity, sheet, "➖", "Oynatma listesinden kaldır", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> {
