@@ -1,0 +1,513 @@
+package app.morphe.extension.music.patches.downloads;
+
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ArgbEvaluator;
+import android.animation.ObjectAnimator;
+import android.animation.PropertyValuesHolder;
+import android.animation.ValueAnimator;
+import android.app.Dialog;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.PixelFormat;
+import android.graphics.RadialGradient;
+import android.graphics.Rect;
+import android.graphics.Shader;
+import android.graphics.drawable.Animatable;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.ProgressBar;
+import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.LinearInterpolator;
+import android.view.animation.OvershootInterpolator;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import java.util.Collections;
+import java.util.IdentityHashMap;
+import java.util.Map;
+import java.util.WeakHashMap;
+
+public final class LocalDownloadsAnimator {
+    public static final long SEARCH_ANIM_MS = 180L;
+    public static final long BOTTOM_SHEET_ANIM_MS = 250L;
+
+    public enum AnimationProfile {
+        SPRING("Yaylanan & Canlı (Overshoot)"),
+        CYBER("Siber & Keskin Kayma"),
+        SMOOTH("Sinematik & Yumuşak Fade"),
+        MINIMAL("Minimal & Hızlı");
+
+        public final String label;
+        AnimationProfile(String label) { this.label = label; }
+    }
+
+    private static final Map<View, ObjectAnimator> BREATHING_ANIMATORS =
+            Collections.synchronizedMap(new IdentityHashMap<>());
+    private static final Map<ProgressBar, ValueAnimator> PROGRESS_ANIMATORS =
+            Collections.synchronizedMap(new WeakHashMap<>());
+
+    private LocalDownloadsAnimator() {}
+
+    public static AnimationProfile getSavedAnimationProfile(Context ctx) {
+        try {
+            SharedPreferences sp = ctx.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE);
+            return AnimationProfile.valueOf(sp.getString("preferred_anim_profile", AnimationProfile.SPRING.name()));
+        } catch (Exception ignored) { return AnimationProfile.SPRING; }
+    }
+
+    public static void setSavedAnimationProfile(Context ctx, AnimationProfile profile) {
+        try {
+            ctx.getSharedPreferences(LocalDownloadsUIState.PREF_NAME, Context.MODE_PRIVATE).edit().putString("preferred_anim_profile", profile.name()).apply();
+        } catch (Exception ignored) {}
+    }
+
+    public static void animateListItemIn(Context ctx, View item, int index, int dpOffset) {
+        if (item == null) return;
+        AnimationProfile profile = getSavedAnimationProfile(ctx);
+        item.setAlpha(0f);
+        item.setTranslationY(dpOffset);
+        long delay = Math.min(index, 10) * (profile == AnimationProfile.MINIMAL ? 10L : 18L);
+        long duration = switch (profile) {
+            case MINIMAL -> 140L;
+            case CYBER -> 180L;
+            case SMOOTH -> 280L;
+            default -> 220L;
+        };
+        android.view.animation.Interpolator interpolator = switch (profile) {
+            case SPRING -> new OvershootInterpolator(1.35f);
+            case CYBER -> new AccelerateDecelerateInterpolator();
+            case SMOOTH -> new DecelerateInterpolator(1.8f);
+            default -> new DecelerateInterpolator();
+        };
+        item.setScaleX(profile == AnimationProfile.SPRING ? 0.96f : 1f);
+        item.setScaleY(profile == AnimationProfile.SPRING ? 0.96f : 1f);
+        item.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f)
+                .setStartDelay(delay).setDuration(duration).setInterpolator(interpolator).start();
+    }
+
+    public static void animateSwipeSuccess(Context ctx, View row, float shiftPx) {
+        if (row == null) return;
+        AnimationProfile profile = getSavedAnimationProfile(ctx);
+        row.animate().cancel();
+        row.animate().translationX(shiftPx).alpha(0.85f).scaleX(1.02f).scaleY(1.02f)
+                .setDuration(profile == AnimationProfile.MINIMAL ? 70L : 95L)
+                .setInterpolator(new DecelerateInterpolator())
+                .withEndAction(() -> row.animate().translationX(0f).alpha(1f).scaleX(1f).scaleY(1f)
+                        .setDuration(profile == AnimationProfile.MINIMAL ? 140L : 220L)
+                        .setInterpolator(new OvershootInterpolator(1.5f)).start()).start();
+    }
+
+    public static void animateQueueItemDrag(View row, boolean dragging) {
+        if (row == null) return;
+        row.animate().cancel();
+        row.animate().scaleX(dragging ? 1.035f : 1f).scaleY(dragging ? 1.035f : 1f)
+                .translationZ(dragging ? 16f : 2f).setDuration(120L).setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    public static void animateQueueItemDrop(View row) {
+        if (row == null) return;
+        Context ctx = row.getContext();
+        row.animate().cancel();
+        row.animate().translationY(0f).scaleX(1f).scaleY(1f)
+                .setDuration(LocalDownloadsUIState.scaleDuration(ctx, 200L)).setInterpolator(new OvershootInterpolator(1.3f)).start();
+    }
+
+    public static void applyArtworkBreathingEffect(View artworkView) {
+        if (artworkView == null) return;
+        stopArtworkBreathingEffect(artworkView);
+        long duration = 3500L;
+        try {
+            Context ctx = artworkView.getContext();
+            duration = LocalDownloadsUIState.scaleDuration(ctx, 3500L);
+            if (LocalDownloadsUIState.isLowPowerMode(ctx)) duration *= 2L;
+        } catch (Exception ignored) {}
+        PropertyValuesHolder pvhX = PropertyValuesHolder.ofFloat("scaleX", 1f, 1.03f, 1f);
+        PropertyValuesHolder pvhY = PropertyValuesHolder.ofFloat("scaleY", 1f, 1.03f, 1f);
+        ObjectAnimator animator = ObjectAnimator.ofPropertyValuesHolder(artworkView, pvhX, pvhY);
+        animator.setRepeatCount(ValueAnimator.INFINITE);
+        animator.setRepeatMode(ValueAnimator.REVERSE);
+        animator.setDuration(duration);
+        animator.setInterpolator(new AccelerateDecelerateInterpolator());
+        animator.start();
+        BREATHING_ANIMATORS.put(artworkView, animator);
+    }
+
+    public static void stopArtworkBreathingEffect(View artworkView) {
+        if (artworkView == null) return;
+        Animator animator = BREATHING_ANIMATORS.remove(artworkView);
+        if (animator != null) { try { animator.cancel(); } catch (Exception ignored) {} }
+    }
+
+    public static void animateBottomSheetShow(View sheet, View overlay, int screenHeight) {
+        if (sheet == null || overlay == null) return;
+        overlay.setAlpha(0f);
+        overlay.animate().alpha(1f).setDuration(BOTTOM_SHEET_ANIM_MS).start();
+        float startY = screenHeight * 0.62f;
+        sheet.setTranslationY(startY);
+        ObjectAnimator slideUp = ObjectAnimator.ofFloat(sheet, "translationY", startY, 0f);
+        slideUp.setDuration(BOTTOM_SHEET_ANIM_MS);
+        slideUp.setInterpolator(new DecelerateInterpolator(1.65f));
+        slideUp.start();
+    }
+
+    public static void animateBottomSheetDismiss(View sheet, View overlay, Dialog dialog, int screenHeight, @Nullable Runnable afterDismiss) {
+        if (sheet == null || overlay == null) {
+            if (dialog != null && dialog.isShowing()) dialog.dismiss();
+            if (afterDismiss != null) afterDismiss.run();
+            return;
+        }
+        overlay.animate().alpha(0f).setDuration(BOTTOM_SHEET_ANIM_MS - 40L).start();
+        ObjectAnimator slideDown = ObjectAnimator.ofFloat(sheet, "translationY", sheet.getTranslationY(), screenHeight * 0.68f);
+        slideDown.setDuration(BOTTOM_SHEET_ANIM_MS - 40L);
+        slideDown.setInterpolator(new DecelerateInterpolator());
+        slideDown.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                try { if (dialog != null && dialog.isShowing()) dialog.dismiss(); } catch (Exception ignored) {}
+                if (afterDismiss != null) afterDismiss.run();
+            }
+        });
+        slideDown.start();
+    }
+
+    public static void slideViewHeight(View view, int targetHeight) {
+        if (view == null) return;
+        ValueAnimator anim = ValueAnimator.ofInt(view.getHeight(), targetHeight);
+        anim.setDuration(SEARCH_ANIM_MS);
+        anim.setInterpolator(new DecelerateInterpolator());
+        anim.addUpdateListener(v -> { view.getLayoutParams().height = (int) v.getAnimatedValue(); view.requestLayout(); });
+        anim.start();
+    }
+
+    public static void animateArtworkSwipe(View artworkWrap, boolean nextTrack, int shiftPx) {
+        if (artworkWrap == null) return;
+        artworkWrap.animate().cancel();
+        artworkWrap.setTranslationX(nextTrack ? -shiftPx : shiftPx);
+        artworkWrap.setScaleX(0.95f); artworkWrap.setScaleY(0.95f);
+        artworkWrap.animate().translationX(0f).scaleX(1f).scaleY(1f).setDuration(210L).setInterpolator(new OvershootInterpolator(1.25f)).start();
+    }
+
+    public static void animateBackgroundColorChange(View view, int toColor) {
+        if (view == null) return;
+        int fromColor = toColor;
+        if (view.getBackground() instanceof ColorDrawable cd) fromColor = cd.getColor();
+        ValueAnimator colorAnim = ValueAnimator.ofObject(new ArgbEvaluator(), fromColor, toColor);
+        colorAnim.setDuration(240L);
+        colorAnim.addUpdateListener(animator -> view.setBackgroundColor((int) animator.getAnimatedValue()));
+        colorAnim.start();
+    }
+
+    public static void animatePlayerMinimize(@Nullable View fullRoot, @Nullable View artwork, @Nullable Runnable onEnd) {
+        if (fullRoot == null) { if (onEnd != null) onEnd.run(); return; }
+        Context ctx = fullRoot.getContext();
+        long duration = LocalDownloadsUIState.scaleDuration(ctx, 260L);
+        fullRoot.animate().cancel();
+        if (artwork != null) {
+            artwork.animate().cancel();
+            artwork.animate().scaleX(0.3f).scaleY(0.3f).translationY(LocalDownloadsUIState.dp(ctx, 180)).alpha(0.15f)
+                    .setDuration(duration).setInterpolator(new AccelerateInterpolator(1.6f)).start();
+        }
+        fullRoot.animate().alpha(0f).setDuration(duration).setInterpolator(new AccelerateInterpolator(1.4f))
+                .withEndAction(() -> {
+                    if (artwork != null) { artwork.setScaleX(1f); artwork.setScaleY(1f); artwork.setTranslationY(0f); artwork.setAlpha(1f); }
+                    fullRoot.setAlpha(1f);
+                    if (onEnd != null) onEnd.run();
+                }).start();
+    }
+
+    public static void animateCoverSwap(@Nullable View artwork, boolean forward, @Nullable Runnable swapAction) {
+        if (artwork == null) { if (swapAction != null) swapAction.run(); return; }
+        Context ctx = artwork.getContext();
+        long outDuration = LocalDownloadsUIState.scaleDuration(ctx, 150L);
+        long inDuration = LocalDownloadsUIState.scaleDuration(ctx, 230L);
+        float shift = LocalDownloadsUIState.dp(ctx, 32) * (forward ? -1f : 1f);
+        artwork.animate().cancel();
+        artwork.animate().translationX(shift).alpha(0f).scaleX(0.94f).scaleY(0.94f)
+                .setDuration(outDuration).setInterpolator(new AccelerateInterpolator())
+                .withEndAction(() -> {
+                    if (swapAction != null) swapAction.run();
+                    artwork.setTranslationX(-shift);
+                    artwork.animate().translationX(0f).alpha(1f).scaleX(1f).scaleY(1f).setDuration(inDuration).setInterpolator(new OvershootInterpolator(1.1f)).start();
+                }).start();
+    }
+
+    public static void animateFocusModeTransition(@Nullable View artwork, @Nullable View actionsRow, boolean entering) {
+        Context ctx = (artwork != null ? artwork : actionsRow) != null ? (artwork != null ? artwork.getContext() : actionsRow.getContext()) : null;
+        if (ctx == null) return;
+        long d = LocalDownloadsUIState.scaleDuration(ctx, 280L);
+        if (artwork != null) {
+            artwork.animate().cancel();
+            float target = entering ? 1.08f : 1f;
+            artwork.animate().scaleX(target).scaleY(target).setDuration(d).setInterpolator(new OvershootInterpolator(1.05f)).start();
+        }
+        if (actionsRow != null) {
+            actionsRow.animate().cancel();
+            actionsRow.animate().alpha(entering ? 0f : 1f).translationY(entering ? LocalDownloadsUIState.dp(ctx, 40) : 0f)
+                    .setDuration(d).setInterpolator(new DecelerateInterpolator(1.4f)).start();
+        }
+    }
+
+    public static void animateLibraryTransition(@Nullable View content, boolean enterFromRight, @Nullable Runnable swapAction) {
+        if (content == null) { if (swapAction != null) swapAction.run(); return; }
+        Context ctx = content.getContext();
+        long outD = LocalDownloadsUIState.scaleDuration(ctx, 140L);
+        long inD = LocalDownloadsUIState.scaleDuration(ctx, 230L);
+        float shift = LocalDownloadsUIState.dp(ctx, 26) * (enterFromRight ? -1f : 1f);
+        content.animate().cancel();
+        content.animate().alpha(0.35f).translationX(shift).setDuration(outD).setInterpolator(new AccelerateInterpolator())
+                .withEndAction(() -> {
+                    if (swapAction != null) swapAction.run();
+                    content.setTranslationX(-shift);
+                    content.animate().alpha(1f).translationX(0f).setDuration(inD).setInterpolator(new DecelerateInterpolator(1.6f)).start();
+                }).start();
+    }
+
+    public static int[] getThemeGradientPalette(LocalDownloadsUIState.ThemePalette theme) {
+        if (theme == null) theme = LocalDownloadsUIState.ThemePalette.YT_MUSIC_PINK;
+        // Anime temaları kaldırıldı; yalnızca standart tema paleti kullanılır.
+        return new int[]{theme.varBgMid, theme.varAccentPrimary, theme.varBgMid, theme.varAccentSecondary, theme.varBgMid};
+    }
+
+    public static int[] getHaloColors(LocalDownloadsUIState.ThemePalette theme) {
+        if (theme == null) theme = LocalDownloadsUIState.ThemePalette.YT_MUSIC_PINK;
+        return new int[]{theme.varAccentPrimary, theme.varAccentSecondary};
+    }
+
+    public static HaloGlowDrawable createHaloDrawable(Context ctx) {
+        OfflineTrack track = LocalDownloadsUIState.findByPath(LocalDownloadsUIState.playingPath);
+        int[] colors = LocalDownloadsUIState.resolveActiveHaloColors(ctx, track);
+        LocalDownloadsUIState.ThemeAnimation style = LocalDownloadsUIState.getCurrentAnimation();
+        return new HaloGlowDrawable(ctx, colors[0], colors[1], style);
+    }
+
+    public static FlowingGradientDrawable createBackgroundGradient(Context ctx) {
+        OfflineTrack track = LocalDownloadsUIState.findByPath(LocalDownloadsUIState.playingPath);
+        return new FlowingGradientDrawable(ctx, LocalDownloadsUIState.resolveActiveGradientPalette(ctx, track));
+    }
+
+    public static void animateProgress(@Nullable ProgressBar progressBar, int targetProgress) {
+        if (progressBar == null) return;
+        int target = Math.max(0, Math.min(progressBar.getMax(), targetProgress));
+        ValueAnimator previous;
+        synchronized (PROGRESS_ANIMATORS) { previous = PROGRESS_ANIMATORS.remove(progressBar); }
+        if (previous != null) { try { previous.cancel(); } catch (Exception ignored) {} }
+        int start = progressBar.getProgress();
+        if (start == target || !progressBar.isAttachedToWindow()) { progressBar.setProgress(target); return; }
+        ValueAnimator animator = ValueAnimator.ofInt(start, target);
+        animator.setDuration(220L);
+        animator.setInterpolator(new DecelerateInterpolator());
+        synchronized (PROGRESS_ANIMATORS) { PROGRESS_ANIMATORS.put(progressBar, animator); }
+        animator.addUpdateListener(valueAnimator -> {
+            synchronized (PROGRESS_ANIMATORS) { if (PROGRESS_ANIMATORS.get(progressBar) != valueAnimator) return; }
+            progressBar.setProgress((Integer) valueAnimator.getAnimatedValue());
+        });
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(Animator endedAnimator) { synchronized (PROGRESS_ANIMATORS) { if (PROGRESS_ANIMATORS.get(progressBar) == endedAnimator) PROGRESS_ANIMATORS.remove(progressBar); } }
+            @Override public void onAnimationCancel(Animator canceledAnimator) { synchronized (PROGRESS_ANIMATORS) { if (PROGRESS_ANIMATORS.get(progressBar) == canceledAnimator) PROGRESS_ANIMATORS.remove(progressBar); } }
+        });
+        animator.start();
+    }
+
+    private static void cancelProgressAnimation(@Nullable ProgressBar progressBar) {
+        if (progressBar == null) return;
+        ValueAnimator animator;
+        synchronized (PROGRESS_ANIMATORS) { animator = PROGRESS_ANIMATORS.remove(progressBar); }
+        if (animator != null) { try { animator.cancel(); } catch (Exception ignored) {} }
+    }
+
+    public static void stopAllPlayerAnimations(@Nullable View root) {
+        if (root == null) return;
+        try { root.animate().cancel(); root.clearAnimation(); } catch (Exception ignored) {}
+        stopArtworkBreathingEffect(root);
+        if (root instanceof ProgressBar progressBar) cancelProgressAnimation(progressBar);
+        Drawable bg = root.getBackground();
+        if (bg instanceof Animatable anim) { try { if (anim.isRunning()) anim.stop(); } catch (Exception ignored) {} }
+        Drawable foreground = null;
+        if (android.os.Build.VERSION.SDK_INT >= 23) { try { foreground = root.getForeground(); } catch (Exception ignored) {} }
+        if (foreground instanceof Animatable anim) { try { if (anim.isRunning()) anim.stop(); } catch (Exception ignored) {} }
+        if (root instanceof ViewGroup vg) for (int i = 0; i < vg.getChildCount(); i++) stopAllPlayerAnimations(vg.getChildAt(i));
+    }
+
+    public static final class HaloGlowDrawable extends Drawable implements Animatable {
+        private final Context ctx;
+        private final int colorPrimary;
+        private final int colorSecondary;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        private RadialGradient primaryShader;
+        private RadialGradient secondaryShader;
+        private int cachedW = 0, cachedH = 0;
+
+        private float phase = 0f;
+        private boolean running = false;
+        private boolean playing = true;
+        private int viewAlpha = 255;
+        private long lastInvalidateMs = 0L;
+        private long lastLowPowerCheck = 0L;
+        private boolean lowPowerCache = false;
+        private ValueAnimator animator;
+
+        HaloGlowDrawable(Context ctx, int colorPrimary, int colorSecondary, LocalDownloadsUIState.ThemeAnimation style) {
+            this.ctx = ctx.getApplicationContext();
+            this.colorPrimary = colorPrimary;
+            this.colorSecondary = colorSecondary;
+            // style gelecekteki tema efektleri için ayrılmıştır (anime temaları kaldırıldı)
+        }
+
+        public void setPlaying(boolean playing) { this.playing = playing; }
+
+        @Override protected void onBoundsChange(@NonNull Rect bounds) { super.onBoundsChange(bounds); rebuildShaders(); }
+
+        private void rebuildShaders() {
+            Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            if (primaryShader != null && w == cachedW && h == cachedH) return;
+            cachedW = w; cachedH = h;
+            float cx = b.exactCenterX(), cy = b.exactCenterY();
+            float radius = Math.min(w, h) * 0.5f;
+            primaryShader = buildRadial(cx, cy, radius, colorPrimary);
+            secondaryShader = buildRadial(cx, cy, radius, colorSecondary);
+        }
+
+        private RadialGradient buildRadial(float cx, float cy, float radius, int color) {
+            return new RadialGradient(cx, cy, radius, new int[]{(color & 0x00FFFFFF) | 0xC0000000, (color & 0x00FFFFFF) | 0x40000000, 0x00000000}, new float[]{0f, 0.6f, 1f}, Shader.TileMode.CLAMP);
+        }
+
+        private boolean isLowPowerCached() {
+            long now = System.currentTimeMillis();
+            if (now - lastLowPowerCheck > 1000L) { lowPowerCache = LocalDownloadsUIState.isLowPowerMode(ctx); lastLowPowerCheck = now; }
+            return lowPowerCache;
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect b = getBounds();
+            if (b.isEmpty()) return;
+            if (primaryShader == null) rebuildShaders();
+            if (primaryShader == null) return;
+            float pulse = (float) (Math.sin(phase * Math.PI * 2.0) * 0.5 + 0.5);
+            float intensity = LocalDownloadsUIState.getAnimationIntensity(ctx);
+            float playFactor = playing ? 1f : 0.4f;
+            float cx = b.exactCenterX(), cy = b.exactCenterY();
+            float r = Math.min(b.width(), b.height()) * 0.5f;
+            int baseAlpha = (int) ((70f + pulse * 90f) * intensity * playFactor);
+            int secAlpha = (int) ((60f + (1f - pulse) * 80f) * intensity * playFactor);
+            int a1 = clamp(baseAlpha * viewAlpha / 255);
+            int a2 = clamp(secAlpha * viewAlpha / 255);
+            paint.setShader(primaryShader); paint.setAlpha(a1); canvas.drawCircle(cx, cy, r, paint);
+            paint.setShader(secondaryShader); paint.setAlpha(a2); canvas.drawCircle(cx, cy, r * (1.05f + pulse * 0.1f), paint);
+        }
+
+        @Override
+        public void start() {
+            if (running) return;
+            running = true;
+            animator = ValueAnimator.ofFloat(0f, 1f);
+            animator.setRepeatCount(ValueAnimator.INFINITE); animator.setRepeatMode(ValueAnimator.RESTART);
+            animator.setDuration(Math.max(1200L, LocalDownloadsUIState.scaleDuration(ctx, 4200L)));
+            animator.setInterpolator(new LinearInterpolator());
+            animator.addUpdateListener(a -> {
+                if (isLowPowerCached()) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastInvalidateMs < 66L) return;
+                    lastInvalidateMs = now;
+                }
+                phase = (float) a.getAnimatedValue();
+                invalidateSelf();
+            });
+            animator.start();
+        }
+
+        @Override public void stop() { running = false; if (animator != null) { try { animator.cancel(); } catch (Exception ignored) {} animator = null; } }
+        @Override public boolean isRunning() { return running; }
+        @Override public void setAlpha(int alpha) { viewAlpha = alpha; invalidateSelf(); }
+        @Override public void setColorFilter(@Nullable ColorFilter cf) { paint.setColorFilter(cf); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    public static final class FlowingGradientDrawable extends Drawable implements Animatable {
+        private final Context ctx;
+        private final int[] colors;
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private LinearGradient shader;
+        private int cachedW = 0, cachedH = 0;
+        private float phase = 0f;
+        private boolean running = false;
+        private int viewAlpha = 255;
+        private long lastInvalidateMs = 0L;
+        private long lastLowPowerCheck = 0L;
+        private boolean lowPowerCache = false;
+        private ValueAnimator animator;
+
+        FlowingGradientDrawable(Context ctx, int[] colors) {
+            this.ctx = ctx.getApplicationContext();
+            this.colors = colors == null || colors.length < 2 ? new int[]{Color.BLACK, Color.WHITE} : colors;
+        }
+
+        @Override protected void onBoundsChange(@NonNull Rect bounds) { super.onBoundsChange(bounds); cachedW = 0; cachedH = 0; ensureShader(); }
+
+        private void ensureShader() {
+            Rect b = getBounds();
+            int w = b.width(), h = b.height();
+            if (w <= 0 || h <= 0) return;
+            if (shader != null && w == cachedW && h == cachedH) return;
+            cachedW = w; cachedH = h;
+            shader = new LinearGradient(b.left, b.top, b.left + w, b.bottom, colors, null, Shader.TileMode.MIRROR);
+        }
+
+        private boolean isLowPowerCached() {
+            long now = System.currentTimeMillis();
+            if (now - lastLowPowerCheck > 1000L) { lowPowerCache = LocalDownloadsUIState.isLowPowerMode(ctx); lastLowPowerCheck = now; }
+            return lowPowerCache;
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect b = getBounds();
+            if (b.isEmpty()) return;
+            if (shader == null) ensureShader();
+            if (shader == null) return;
+            paint.setShader(shader); paint.setAlpha(viewAlpha);
+            float w = b.width();
+            canvas.save(); canvas.translate(-phase * 2f * w, 0f); canvas.drawRect(-w, b.top, b.right + 2f * w, b.bottom, paint); canvas.restore();
+        }
+
+        @Override
+        public void start() {
+            if (running) return; running = true;
+            animator = ValueAnimator.ofFloat(0f, 1f);
+            animator.setRepeatCount(ValueAnimator.INFINITE); animator.setRepeatMode(ValueAnimator.RESTART);
+            animator.setDuration(Math.max(3000L, LocalDownloadsUIState.scaleDuration(ctx, 12000L)));
+            animator.setInterpolator(new LinearInterpolator());
+            animator.addUpdateListener(a -> {
+                if (isLowPowerCached()) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastInvalidateMs < 66L) return;
+                    lastInvalidateMs = now;
+                }
+                phase = (float) a.getAnimatedValue(); invalidateSelf();
+            });
+            animator.start();
+        }
+
+        @Override public void stop() { running = false; if (animator != null) { try { animator.cancel(); } catch (Exception ignored) {} animator = null; } }
+        @Override public boolean isRunning() { return running; }
+        @Override public void setAlpha(int alpha) { viewAlpha = alpha; invalidateSelf(); }
+        @Override public void setColorFilter(@Nullable ColorFilter cf) { paint.setColorFilter(cf); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
+    private static int clamp(int v) { return Math.max(0, Math.min(255, v)); }
+}
