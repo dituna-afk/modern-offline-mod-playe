@@ -71,7 +71,8 @@ public final class LocalDownloadManager {
     }
 
     public enum LyricsSource {
-        AUTO_ALL("Otomatik (Tam Eşleşme)"),
+        AUTO_ALL("Otomatik (YT Music + 3. Parti)"),
+        YOUTUBE_MUSIC("YouTube Music (Resmi Sözler)"),
         GENIUS("Genius (Geniş Arşiv)"),
         LRCLIB("LRCLIB (Senkronize Söz)"),
         MUSIXMATCH("Musixmatch (Doğrulanmış)"),
@@ -589,7 +590,7 @@ public final class LocalDownloadManager {
         }
 
         if (finalLrcContent == null || finalLrcContent.isBlank()) {
-            finalLrcContent = fetchFromSelectedSource(source, cleanTitle, cleanArtist, durationSeconds);
+            finalLrcContent = fetchFromSelectedSource(source, videoId, cleanTitle, cleanArtist, durationSeconds);
         }
 
         if (finalLrcContent == null || finalLrcContent.isBlank() || isGibberishOrCorruptedLyrics(finalLrcContent)) return false;
@@ -701,8 +702,16 @@ public final class LocalDownloadManager {
     }
 
     @Nullable
-    private static String fetchFromSelectedSource(LyricsSource source, String cleanTitle, String cleanArtist, int durationSeconds) {
+    private static String fetchFromSelectedSource(LyricsSource source, String videoId, String cleanTitle, String cleanArtist, int durationSeconds) {
         String content = null;
+
+        // YENİ: Önce YouTube Music'in resmi sözlerini dene
+        if (source == LyricsSource.YOUTUBE_MUSIC || source == LyricsSource.AUTO_ALL) {
+            try { content = tryFetchYtMusicLyrics(videoId); } catch (Exception ignored) {}
+            if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
+            content = null;
+            if (source == LyricsSource.YOUTUBE_MUSIC) return null;
+        }
 
         if (source == LyricsSource.LRCLIB || source == LyricsSource.AUTO_ALL) {
             try { content = tryFetchLrclibExact(cleanTitle, cleanArtist, durationSeconds); } catch (Exception ignored) {}
@@ -757,6 +766,164 @@ public final class LocalDownloadManager {
         }
 
         return (content != null && !isGibberishOrCorruptedLyrics(content)) ? content : null;
+    }
+
+    /**
+     * YENİ: YouTube Music InnerTube API üzerinden resmi şarkı sözlerini çeker.
+     * YT Music'te bir şarkının sözleri varsa "Lyrics" sekmesinde JSON olarak döner.
+     */
+    @Nullable
+    private static String tryFetchYtMusicLyrics(String videoId) {
+        if (videoId == null || videoId.isBlank()) return null;
+        try {
+            String endpoint = "https://music.youtube.com/youtubei/v1/next?prettyPrint=false";
+            String payload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20240101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"videoId\":\"" + videoId + "\"}";
+            String response = postInnerTubeJson(endpoint, payload);
+            if (response == null || response.isEmpty()) return null;
+
+            JSONObject root = new JSONObject(response);
+            
+            // Önce derinlemesine söz araması yap (musicDescriptionShelfRenderer arar)
+            String lyrics = deepSearchLyrics(root);
+            if (lyrics != null && !lyrics.isBlank()) return lyrics;
+
+            // Eğer doğrudan bulunamadıysa devam (continuation) veya browseId araması yapalım
+            String continuation = findFirstContinuationForLyrics(root);
+            if (continuation != null) {
+                String contPayload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20240101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"continuation\":\"" + continuation + "\"}";
+                String contResponse = postInnerTubeJson("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false", contPayload);
+                if (contResponse != null) {
+                    String contLyrics = deepSearchLyrics(new JSONObject(contResponse));
+                    if (contLyrics != null && !contLyrics.isBlank()) return contLyrics;
+                }
+            }
+
+            String browseId = findBrowseIdForLyrics(root);
+            if (browseId != null) {
+                String browsePayload = "{\"context\":{\"client\":{\"clientName\":\"WEB_REMIX\",\"clientVersion\":\"1.20240101.01.00\",\"hl\":\"tr\",\"gl\":\"TR\"}},\"browseId\":\"" + browseId + "\"}";
+                String browseResponse = postInnerTubeJson("https://music.youtube.com/youtubei/v1/browse?prettyPrint=false", browsePayload);
+                if (browseResponse != null) {
+                    String browseLyrics = deepSearchLyrics(new JSONObject(browseResponse));
+                    if (browseLyrics != null && !browseLyrics.isBlank()) return browseLyrics;
+                }
+            }
+            
+            return null;
+        } catch (Exception e) {
+            Logger.printDebug(() -> "YT Music lyrics fetch failed for " + videoId, e);
+            return null;
+        }
+    }
+
+    /**
+     * JSON ağacında şarkı sözü metnini (musicDescriptionShelfRenderer) bulur.
+     */
+    @Nullable
+    private static String deepSearchLyrics(JSONObject obj) {
+        if (obj == null) return null;
+        
+        if (obj.has("musicDescriptionShelfRenderer")) {
+            JSONObject shelf = obj.optJSONObject("musicDescriptionShelfRenderer");
+            if (shelf != null) {
+                JSONObject description = shelf.optJSONObject("description");
+                if (description != null) {
+                    String text = description.optString("simpleText", "");
+                    if (!text.isEmpty()) return text.trim();
+                    
+                    JSONArray runs = description.optJSONArray("runs");
+                    if (runs != null) {
+                        StringBuilder sb = new StringBuilder();
+                        for (int i = 0; i < runs.length(); i++) {
+                            JSONObject run = runs.optJSONObject(i);
+                            if (run != null) sb.append(run.optString("text", ""));
+                        }
+                        if (sb.length() > 0) return sb.toString().trim();
+                    }
+                }
+            }
+        }
+
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object val = obj.opt(key);
+            if (val instanceof JSONObject) {
+                String res = deepSearchLyrics((JSONObject) val);
+                if (res != null && !res.isBlank()) return res;
+            } else if (val instanceof JSONArray) {
+                JSONArray arr = (JSONArray) val;
+                for (int i = 0; i < arr.length(); i++) {
+                    Object item = arr.opt(i);
+                    if (item instanceof JSONObject) {
+                        String res = deepSearchLyrics((JSONObject) item);
+                        if (res != null && !res.isBlank()) return res;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static String findFirstContinuationForLyrics(JSONObject obj) {
+        if (obj == null) return null;
+        if (obj.has("continuationCommand")) {
+            JSONObject cmd = obj.optJSONObject("continuationCommand");
+            if (cmd != null) {
+                String token = cmd.optString("token", "");
+                if (!token.isEmpty()) return token;
+            }
+        }
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object val = obj.opt(key);
+            if (val instanceof JSONObject) {
+                String res = findFirstContinuationForLyrics((JSONObject) val);
+                if (res != null) return res;
+            } else if (val instanceof JSONArray) {
+                JSONArray arr = (JSONArray) val;
+                for (int i = 0; i < arr.length(); i++) {
+                    Object item = arr.opt(i);
+                    if (item instanceof JSONObject) {
+                        String res = findFirstContinuationForLyrics((JSONObject) item);
+                        if (res != null) return res;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static String findBrowseIdForLyrics(JSONObject obj) {
+        if (obj == null) return null;
+        if (obj.has("browseEndpoint")) {
+            JSONObject ep = obj.optJSONObject("browseEndpoint");
+            if (ep != null) {
+                String id = ep.optString("browseId", "");
+                if (id.startsWith("MPLYt") || id.startsWith("VL")) return id;
+            }
+        }
+        java.util.Iterator<String> keys = obj.keys();
+        while (keys.hasNext()) {
+            String key = keys.next();
+            Object val = obj.opt(key);
+            if (val instanceof JSONObject) {
+                String res = findBrowseIdForLyrics((JSONObject) val);
+                if (res != null) return res;
+            } else if (val instanceof JSONArray) {
+                JSONArray arr = (JSONArray) val;
+                for (int i = 0; i < arr.length(); i++) {
+                    Object item = arr.opt(i);
+                    if (item instanceof JSONObject) {
+                        String res = findBrowseIdForLyrics((JSONObject) item);
+                        if (res != null) return res;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     @Nullable
