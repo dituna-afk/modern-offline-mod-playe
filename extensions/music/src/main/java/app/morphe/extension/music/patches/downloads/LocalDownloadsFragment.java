@@ -15,6 +15,8 @@ import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.preference.PreferenceFragment;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -36,6 +38,8 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import app.morphe.extension.shared.Logger;
 import app.morphe.extension.shared.Utils;
@@ -50,12 +54,23 @@ public final class LocalDownloadsFragment extends PreferenceFragment
     private static final float Z_INDEX_MINI_PLAYER = 20f;
     private static final float Z_INDEX_BOTTOM_NAV = 24f;
 
+    // YENİ: Throttle / debounce sabitleri
+    private static final long REFRESH_THROTTLE_MS = 250L;
+    private static final long SHOW_TRACKS_DEBOUNCE_MS = 400L;
+
     private File musicRoot;
     private LinearLayout rootLayout;
     @Nullable private ScrollView mainScroll;
 
     private static boolean animateNextTransition = false;
     private static boolean transitionFromRight = true;
+
+    // YENİ: UI thread üzerinde coalescing için
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private final AtomicLong lastRefreshTime = new AtomicLong(0L);
+    private final AtomicBoolean refreshTrailingPending = new AtomicBoolean(false);
+    private final AtomicBoolean showTracksPending = new AtomicBoolean(false);
+    private boolean preserveScrollOnNextRender = false;
 
     public static void requestLibraryTransition(boolean fromRight) {
         animateNextTransition = true;
@@ -97,7 +112,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         ScrollView scroll = new ScrollView(activity);
         scroll.setFillViewport(true);
         mainScroll = scroll;
-        
+
         LocalDownloadsUIState.songsList = new LinearLayout(activity);
         LocalDownloadsUIState.songsList.setOrientation(LinearLayout.VERTICAL);
         LocalDownloadsUIState.songsList.setPadding(LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 6), LocalDownloadsUIState.dp(activity, 12), LocalDownloadsUIState.dp(activity, 88));
@@ -135,8 +150,8 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         OfflineHeaderBlocker.attach(activity, rootLayout);
 
         LocalDownloadsUIState.diskReloadNeeded = true;
-        showTracks();
-        refreshDownloadStatusUI();
+        showTracksInternal();
+        refreshDownloadStatusUIImmediate();
 
         final LinearLayout entranceRoot = rootLayout;
         entranceRoot.setAlpha(0f);
@@ -158,7 +173,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         OfflineHeaderBlocker.attach(act, rootLayout);
         OfflinePlaybackService.addListener(this);
         LocalDownloadManager.addListener(this);
-        refreshDownloadStatusUI();
+        refreshDownloadStatusUIImmediate();
     }
 
     @Override
@@ -173,6 +188,11 @@ public final class LocalDownloadsFragment extends PreferenceFragment
 
     @Override
     public void onDestroyView() {
+        // YENİ: Pending callback'leri temizle
+        uiHandler.removeCallbacksAndMessages(null);
+        refreshTrailingPending.set(false);
+        showTracksPending.set(false);
+
         Activity act = getActivity();
         if (rootLayout != null) {
             try {
@@ -183,11 +203,10 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         }
         LocalDownloadsUIState.restoreHostHeader(act);
         OfflineHeaderBlocker.detach(act);
-        
-        // GÖREV 4: Uygulamadan çıkıldığında veya ekran yeniden oluşturulduğunda oynatıcı referanslarını temizle
         LocalDownloadsPlayer.resetPlayerState();
-        
+
         rootLayout = null;
+        mainScroll = null;
         super.onDestroyView();
     }
 
@@ -204,11 +223,11 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         if (LocalDownloadsUIState.selectionMode) {
             LocalDownloadsUIState.selectionMode = false;
             LocalDownloadsUIState.selectedVideoIds.clear();
-            showTracks();
+            showTracksInternal();
             return;
         }
         if (!LocalDownloadsUIState.showingPlaylistsOverview || LocalDownloadsUIState.selectedPlaylist != null || LocalDownloadsUIState.showingArtists || LocalDownloadsUIState.currentSmartFilter != LocalDownloadsUIState.SmartFilterMode.NONE || LocalDownloadsUIState.currentFilterMode != LocalDownloadsUIState.FilterMode.ALL) {
-            
+
             LocalDownloadsFragment.requestLibraryTransition(false);
             LocalDownloadsUIState.selectedPlaylist = null;
             LocalDownloadsUIState.selectedArtist = null;
@@ -216,18 +235,46 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             LocalDownloadsUIState.showingPlaylistsOverview = true;
             LocalDownloadsUIState.currentSmartFilter = LocalDownloadsUIState.SmartFilterMode.NONE;
             LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL;
-            
+
             LocalDownloadsUIState.animateNextSongList = false;
-            showTracks();
+            showTracksInternal();
             if (act != null) LocalDownloadsHeader.refreshBottomNavigationTheme(act);
         }
     }
 
     public File getMusicRoot() { return musicRoot; }
 
+    // ============================================================
+    // showTracks — Kullanıcı aksiyonu: hemen çalışır
+    // showTracksAfterDownloadComplete — Debounce edilir + scroll korunur
+    // ============================================================
+
     public void showTracks() {
+        // Kullanıcı aksiyonundan gelen çağrı: anında çalışsın. Pending debounce
+        // varsa "zaten çizildi" mantığıyla kendini iptal edecek.
+        showTracksInternal();
+    }
+
+    public void showTracksAfterDownloadComplete() {
+        // YENİ: İndirme tamamlandığında debounce. 100 şarkı toplu indirildiğinde
+        // 100 ayrı rebuild yerine tek rebuild.
+        if (showTracksPending.getAndSet(true)) return;
+        preserveScrollOnNextRender = true;
+        uiHandler.postDelayed(() -> {
+            showTracksPending.set(false);
+            showTracksInternal();
+        }, SHOW_TRACKS_DEBOUNCE_MS);
+    }
+
+    private void showTracksInternal() {
         Activity act = getActivity();
         if (act == null || LocalDownloadsUIState.songsList == null) return;
+
+        int restoreScrollY = 0;
+        if (preserveScrollOnNextRender && mainScroll != null) {
+            restoreScrollY = mainScroll.getScrollY();
+        }
+        preserveScrollOnNextRender = false;
 
         if (animateNextTransition) {
             animateNextTransition = false;
@@ -235,6 +282,13 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             LocalDownloadsAnimator.animateLibraryTransition(target, transitionFromRight, () -> LocalDownloadsListRenderer.renderTracksAndPlaylists(act, musicRoot, this));
         } else {
             LocalDownloadsListRenderer.renderTracksAndPlaylists(act, musicRoot, this);
+        }
+
+        if (restoreScrollY > 0 && mainScroll != null) {
+            final int y = restoreScrollY;
+            mainScroll.post(() -> {
+                if (mainScroll != null) mainScroll.scrollTo(0, y);
+            });
         }
     }
 
@@ -261,7 +315,8 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             refreshDownloadStatusUI();
             if (completed) {
                 LocalDownloadsUIState.diskReloadNeeded = true;
-                showTracks();
+                // YENİ: Debounced — toplu indirmede tek rebuild
+                showTracksAfterDownloadComplete();
             }
         });
     }
@@ -305,7 +360,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             boolean paused = !LocalDownloadManager.isPaused();
             LocalDownloadManager.setPaused(paused);
             Utils.showToastShort(paused ? "İndirmeler duraklatıldı" : "İndirmeler devam ediyor");
-            refreshDownloadStatusUI();
+            refreshDownloadStatusUIImmediate();
         });
         topRow.addView(LocalDownloadsUIState.downloadBannerPauseBtn);
 
@@ -366,7 +421,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         quickRow.setPadding(0, LocalDownloadsUIState.dp(ctx, 6), 0, 0);
 
         TextView selectAllBtn = LocalDownloadsUIState.createPillButton(ctx, "Tümünü Seç", false);
-        selectAllBtn.setOnClickListener(v -> { for (OfflineTrack t : LocalDownloadsUIState.currentDisplayedTracks) LocalDownloadsUIState.selectedVideoIds.add(t.videoId()); showTracks(); });
+        selectAllBtn.setOnClickListener(v -> { for (OfflineTrack t : LocalDownloadsUIState.currentDisplayedTracks) LocalDownloadsUIState.selectedVideoIds.add(t.videoId()); showTracksInternal(); });
         quickRow.addView(selectAllBtn);
 
         LinearLayout.LayoutParams oLp = new LinearLayout.LayoutParams(-2, -2);
@@ -377,7 +432,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         selectOrphansBtn.setOnClickListener(v -> {
             Set<String> inPlaylists = LocalDownloadsUIState.getAllPlaylistTrackIds();
             for (OfflineTrack t : LocalDownloadsUIState.tracks) if (!inPlaylists.contains(t.videoId())) LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
-            showTracks();
+            showTracksInternal();
         });
         quickRow.addView(selectOrphansBtn);
 
@@ -385,18 +440,18 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         selectBrokenBtn.setLayoutParams(oLp);
         selectBrokenBtn.setOnClickListener(v -> {
             for (OfflineTrack t : LocalDownloadsUIState.tracks) if (LocalDownloadsUIState.isBrokenOrIncompleteTrack(t)) LocalDownloadsUIState.selectedVideoIds.add(t.videoId());
-            showTracks();
+            showTracksInternal();
         });
         quickRow.addView(selectBrokenBtn);
 
         TextView clearSelBtn = LocalDownloadsUIState.createPillButton(ctx, "Seçimi Temizle", false);
         clearSelBtn.setLayoutParams(oLp);
-        clearSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectedVideoIds.clear(); showTracks(); });
+        clearSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectedVideoIds.clear(); showTracksInternal(); });
         quickRow.addView(clearSelBtn);
 
         TextView closeSelBtn = LocalDownloadsUIState.createPillButton(ctx, "✕ Kapat", false);
         closeSelBtn.setLayoutParams(oLp);
-        closeSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectionMode = false; LocalDownloadsUIState.selectedVideoIds.clear(); LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL; showTracks(); });
+        closeSelBtn.setOnClickListener(v -> { LocalDownloadsUIState.selectionMode = false; LocalDownloadsUIState.selectedVideoIds.clear(); LocalDownloadsUIState.currentFilterMode = LocalDownloadsUIState.FilterMode.ALL; showTracksInternal(); });
         quickRow.addView(closeSelBtn);
 
         quickScroll.addView(quickRow);
@@ -405,7 +460,46 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         return bar;
     }
 
+    // ============================================================
+    // refreshDownloadStatusUI — LEADING + TRAILING THROTTLE (250ms)
+    // ============================================================
+
+    /**
+     * Throttled refresh. Kullanıcı aksiyonundan gelen çağrılar da bu metodu
+     * kullanabilir; ilk çağrı anında çalışır, sonraki çağrılar 250ms
+     * penceresinin sonunda tek bir kez çalışır.
+     *
+     * <p><b>Neden önemli:</b> İndirme sırasında 2 paralel indirme × 850ms
+     * notification gate'i = saniyede ~2.4 listener callback. Her biri banner
+     * + kuyruk dialog full rebuild tetikliyordu. 100 item'da saniyede
+     * ~240 satır alloc. Şimdi en fazla 4/sn.</p>
+     */
     public void refreshDownloadStatusUI() {
+        long now = System.currentTimeMillis();
+        long last = lastRefreshTime.get();
+        long elapsed = now - last;
+
+        if (elapsed >= REFRESH_THROTTLE_MS) {
+            lastRefreshTime.set(now);
+            doRefreshDownloadStatusUI();
+            return;
+        }
+
+        if (refreshTrailingPending.getAndSet(true)) return;
+        uiHandler.postDelayed(() -> {
+            refreshTrailingPending.set(false);
+            lastRefreshTime.set(System.currentTimeMillis());
+            doRefreshDownloadStatusUI();
+        }, REFRESH_THROTTLE_MS - elapsed);
+    }
+
+    /** Anında refresh — pause/cancel gibi kullanıcı aksiyonları için. */
+    public void refreshDownloadStatusUIImmediate() {
+        lastRefreshTime.set(System.currentTimeMillis());
+        doRefreshDownloadStatusUI();
+    }
+
+    private void doRefreshDownloadStatusUI() {
         List<LocalDownloadManager.QueueItem> queue = LocalDownloadManager.getQueueSnapshot();
         boolean paused = LocalDownloadManager.isPaused();
 
@@ -468,7 +562,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
                     OfflineStorage.setPlaylistCoverBitmap(musicRoot, LocalDownloadsUIState.pendingCoverPlaylistName, scaled);
                     LocalDownloadsUIState.ARTWORK_CACHE.evictAll();
                     LocalDownloadsUIState.diskReloadNeeded = true;
-                    Utils.runOnMainThread(() -> { Utils.showToastShort("Oynatma listesi kapağı güncellendi"); showTracks(); });
+                    Utils.runOnMainThread(() -> { Utils.showToastShort("Oynatma listesi kapağı güncellendi"); showTracksInternal(); });
                 } else if (requestCode == LocalDownloadsUIState.REQ_PICK_THEME_WALLPAPER) {
                     if (!musicRoot.isDirectory()) musicRoot.mkdirs();
                     OfflineStorage.writeJpeg(new File(musicRoot, LocalDownloadsUIState.CUSTOM_WALLPAPER_FILE), scaled);
@@ -481,14 +575,14 @@ public final class LocalDownloadsFragment extends PreferenceFragment
                         String vid = LocalDownloadsUIState.pendingCoverTrackId;
                         File customCoverFile = new File(musicRoot, vid + "_custom.jpg");
                         OfflineStorage.writeJpeg(customCoverFile, scaled);
-                        
+
                         LocalDownloadsUIState.ARTWORK_CACHE.evictAll();
                         LocalDownloadsUIState.TRACK_CACHE.clear();
                         LocalDownloadsUIState.diskReloadNeeded = true;
-                        
+
                         Utils.runOnMainThread(() -> {
                             Utils.showToastShort("✓ Şarkı kapağı başarıyla güncellendi");
-                            showTracks();
+                            showTracksInternal();
                             OfflineTrack updatedTrack = LocalDownloadsUIState.findById(vid);
                             if (updatedTrack != null && LocalDownloadsUIState.playingPath.equals(updatedTrack.audioFile().getAbsolutePath())) {
                                 LocalDownloadsPlayer.applyTrackVisuals(act, updatedTrack);
@@ -516,7 +610,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         confirm("İndirmeleri Durdur", "Bekleyen ve aktif olan tüm indirmeler iptal edilip yarım kalan (.part) dosyalar silinsin mi?", () -> {
             LocalDownloadManager.cancelAllDownloads(musicRoot);
             cleanPartFiles();
-            refreshDownloadStatusUI();
+            refreshDownloadStatusUIImmediate();
             Utils.showToastShort("Tüm indirmeler durduruldu");
         });
     }
@@ -537,7 +631,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             }
             LocalDownloadsUIState.selectedVideoIds.clear();
             LocalDownloadsUIState.diskReloadNeeded = true;
-            showTracks();
+            showTracksInternal();
             Utils.showToastShort(toDelete.size() + " şarkı silindi");
         });
     }
@@ -547,7 +641,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
             OfflineStorage.deletePlaylist(musicRoot, playlistName);
             if (playlistName.equalsIgnoreCase(LocalDownloadsUIState.selectedPlaylist)) LocalDownloadsUIState.selectedPlaylist = null;
             LocalDownloadsUIState.diskReloadNeeded = true;
-            showTracks();
+            showTracksInternal();
             Utils.showToastShort("Liste silindi");
         });
     }
@@ -577,7 +671,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         LocalDownloadsUIState.TRACK_CACHE.clear();
         LocalDownloadsUIState.selectedVideoIds.clear();
         LocalDownloadsUIState.diskReloadNeeded = true;
-        showTracks();
+        showTracksInternal();
         Utils.showToastShort(str("morphe_music_downloads_all_deleted"));
     }
 
@@ -589,7 +683,7 @@ public final class LocalDownloadsFragment extends PreferenceFragment
         LocalDownloadsUIState.selectedVideoIds.remove(t.videoId());
         if (!deleted) { Utils.showToastShort(str("morphe_music_downloads_track_delete_failed")); return; }
         LocalDownloadsUIState.diskReloadNeeded = true;
-        showTracks();
+        showTracksInternal();
         Utils.showToastShort(str("morphe_music_downloads_track_deleted"));
     }
 

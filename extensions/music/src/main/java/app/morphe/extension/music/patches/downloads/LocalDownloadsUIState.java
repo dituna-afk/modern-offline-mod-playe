@@ -109,7 +109,6 @@ public final class LocalDownloadsUIState {
     public static final String PREF_SWIPE_TO_PLAY_NEXT_KEY = "swipe_to_play_next_enabled";
     public static final String CUSTOM_WALLPAPER_FILE = "custom_theme_wallpaper.jpg";
 
-    // HEX renk özelleştirmeleri (Faye kalıntılarının yerine)
     public static final String PREF_HEX_ACCENT_KEY = "hex_custom_accent_color";
     public static final String PREF_HEX_BG_KEY = "hex_custom_bg_color";
 
@@ -131,14 +130,12 @@ public final class LocalDownloadsUIState {
     public static final String PREF_CROSSFADE_SECONDS = "player_crossfade_seconds";
     public static final String PREF_SLEEP_FADE_ENABLED = "player_sleep_fade_enabled";
 
-    // Yeni: EQ, BassBoost, Hız
     public static final String PREF_EQ_ENABLED = "player_eq_enabled";
     public static final String PREF_EQ_BASS_ENABLED = "player_eq_bass_enabled";
     public static final String PREF_EQ_BASS_STRENGTH = "player_eq_bass_strength";
     public static final String PREF_EQ_BANDS_JSON = "player_eq_bands_json";
     public static final String PREF_PLAYBACK_SPEED = "player_playback_speed";
 
-    // Yeni: İndirme hız limiti (KB/sn), 0 = sınırsız
     public static final String PREF_DOWNLOAD_RATE_LIMIT = "download_rate_limit_kbps";
 
     public static final float DEFAULT_ANIMATION_SPEED = 1.0f;
@@ -155,10 +152,38 @@ public final class LocalDownloadsUIState {
     public static final int DEFAULT_CUSTOM_COLOR1 = Color.parseColor("#C45BDF");
     public static final int DEFAULT_CUSTOM_COLOR2 = Color.parseColor("#FFD34E");
 
-    public static final LruCache<String, Bitmap> ARTWORK_CACHE = new LruCache<>(90);
+    // ==== KRİTİK OOM FIX ====
+    // Eski: new LruCache<>(90) — 90 girdi, sizeOf default 1.
+    // 90 × 720px×720px×4byte = ~187 MB → neredeyse kesin OOM.
+    // Yeni: byte-based; max heap'in 1/8'i (tipik cihazda 32-64 MB).
+    // sizeOf() = bitmap byte cinsinden → cache gerçek bellek baskısıyla tahliye yapar.
+    private static final int MAX_CACHE_KB = (int) (Runtime.getRuntime().maxMemory() / 1024 / 8);
+    public static final LruCache<String, Bitmap> ARTWORK_CACHE =
+            new LruCache<String, Bitmap>(MAX_CACHE_KB) {
+                @Override
+                protected int sizeOf(@NonNull String key, @NonNull Bitmap value) {
+                    return value.getByteCount() / 1024;
+                }
+                @Override
+                protected void entryRemoved(boolean evicted, @NonNull String key,
+                                            @NonNull Bitmap oldValue, @Nullable Bitmap newValue) {
+                    // Bitmap recycle çağrısı API 33+ için no-op ama eski API'lerde bellek
+                    // geri kazanımı sağlar. Ancak decode tarafında referans varsa crash riski.
+                    // Riskli olduğundan yalnızca evicted olunca recycle etmiyoruz.
+                }
+            };
+
     public static final Map<String, CachedTrackEntry> TRACK_CACHE = new ConcurrentHashMap<>();
 
+    // YENİ: O(1) lookup — findByPath/findById her playlist render'da 10k+ çağrılıyordu.
+    private static final Map<String, OfflineTrack> TRACK_BY_ID = new HashMap<>();
+    private static final Map<String, OfflineTrack> TRACK_BY_PATH = new HashMap<>();
+
     private static List<String> cachedArtists = null;
+
+    // YENİ: markPlayingRow skip cache — playback tick'inde 500 satırı yeniden çizmeyi önler
+    private static String lastMarkedPlayingPath = "";
+    private static int lastMarkedRowCount = 0;
 
     public record CachedTrackEntry(long lastModified, long length,
                                    long metadataLastModified, long metadataLength,
@@ -192,10 +217,6 @@ public final class LocalDownloadsUIState {
         }
     }
 
-    /**
-     * Tema paletleri — anime temaları (Evangelion, Griffith, Faye) kaldırıldı.
-     * Renk alanları, HEX renk özelleştirmesi için runtime'da mutate edilebilir (final değil).
-     */
     public enum ThemePalette {
         YT_MUSIC_PINK("YT Müzik Pembe Tema", Color.parseColor("#24071C"), Color.parseColor("#140410"), Color.parseColor("#090208"), Color.parseColor("#FF2A70"), Color.parseColor("#FF6E9E"), Color.argb(42, 255, 180, 215), Color.argb(75, 255, 80, 145), Color.parseColor("#FFFFFF")),
         AMOLED_NIGHT("AMOLED Gece", Color.parseColor("#0A0A0C"), Color.parseColor("#040406"), Color.parseColor("#000000"), Color.parseColor("#FF2A70"), Color.parseColor("#00E5FF"), Color.argb(36, 255, 255, 255), Color.argb(60, 255, 255, 255), Color.parseColor("#FFFFFF")),
@@ -277,6 +298,21 @@ public final class LocalDownloadsUIState {
     public static boolean hostWindowStateCaptured = false;
     public static boolean hostWindowWasFullscreen = false;
 
+    // ==== YENİ: Sıcak SharedPreferences önbelleği ====
+    // Playback tick'i sırasında (her 400ms) updatePlayIcon() 3 pref okuyordu,
+    // checkCrossfade/checkSleepFade 2 pref okuyordu → saniyede ~12 disk lookup.
+    // Artık volatile cache ile 0 disk lookup.
+    private static volatile boolean effectsMasterCached = true;
+    private static volatile boolean effectsMasterReady = false;
+    private static volatile boolean lowPowerCached = false;
+    private static volatile boolean lowPowerReady = false;
+    private static volatile boolean coverBreathingCached = true;
+    private static volatile boolean coverBreathingReady = false;
+    private static volatile boolean crossfadeEnabledCached = false;
+    private static volatile boolean crossfadeEnabledReady = false;
+    private static volatile boolean sleepFadeEnabledCached = true;
+    private static volatile boolean sleepFadeEnabledReady = false;
+
     private LocalDownloadsUIState() {}
 
     public static void loadSavedPreferences(Context context, File musicRoot) {
@@ -293,8 +329,27 @@ public final class LocalDownloadsUIState {
             customWallpaperActive = false;
             swipeToPlayNext = true;
         }
+        // YENİ: Sıcak prefs önbelleğini açılışta doldur
+        warmHotPrefs(context);
         applyHexOverrides(context);
         reloadCustomWallpaper(musicRoot);
+    }
+
+    private static void warmHotPrefs(Context ctx) {
+        if (ctx == null) return;
+        try {
+            SharedPreferences p = effectsPrefs(ctx);
+            effectsMasterCached = p.getBoolean(PREF_EFFECTS_MASTER_KEY, true);
+            effectsMasterReady = true;
+            lowPowerCached = p.getBoolean(PREF_LOW_POWER_MODE_KEY, false);
+            lowPowerReady = true;
+            coverBreathingCached = p.getBoolean("player_cover_breathing", true);
+            coverBreathingReady = true;
+            crossfadeEnabledCached = p.getBoolean(PREF_CROSSFADE_ENABLED, false);
+            crossfadeEnabledReady = true;
+            sleepFadeEnabledCached = p.getBoolean(PREF_SLEEP_FADE_ENABLED, true);
+            sleepFadeEnabledReady = true;
+        } catch (Exception ignored) {}
     }
 
     public static void applyHexOverrides(Context context) {
@@ -855,7 +910,22 @@ public final class LocalDownloadsUIState {
         }
         playlists = OfflineStorage.loadPlaylists(musicRoot);
         if (selectedPlaylist != null && findPlaylist(selectedPlaylist) == null) selectedPlaylist = null;
+        // YENİ: O(1) index'i yeniden inşa et
+        rebuildTrackIndex();
         invalidateArtistCache();
+        // YENİ: Row mark cache'ini de geçersiz kıl (liste yeniden inşa edildi)
+        resetRowMarkCache();
+    }
+
+    // YENİ: findById/findByPath için HashMap index — playlist cover render'da
+    // 500 track × 20 playlist = 10.000 lineer arama yerine 20 O(1) lookup.
+    private static void rebuildTrackIndex() {
+        TRACK_BY_ID.clear();
+        TRACK_BY_PATH.clear();
+        for (OfflineTrack t : tracks) {
+            TRACK_BY_ID.put(t.videoId(), t);
+            TRACK_BY_PATH.put(t.audioFile().getAbsolutePath(), t);
+        }
     }
 
     @Nullable
@@ -886,16 +956,30 @@ public final class LocalDownloadsUIState {
                 || t.videoId().toLowerCase(Locale.ROOT).contains(query);
     }
 
+    // YENİ: O(1) lookup
     @Nullable
     public static OfflineTrack findByPath(String path) {
         if (path == null || path.isEmpty()) return null;
-        for (OfflineTrack t : tracks) if (t.audioFile().getAbsolutePath().equals(path)) return t;
+        OfflineTrack t = TRACK_BY_PATH.get(path);
+        if (t != null) return t;
+        // Index boşsa (loadTracksIfNeeded hiç çağrılmamış olabilir) fallback
+        if (TRACK_BY_PATH.isEmpty() && !tracks.isEmpty()) {
+            rebuildTrackIndex();
+            return TRACK_BY_PATH.get(path);
+        }
         return null;
     }
 
+    // YENİ: O(1) lookup
     @Nullable
     public static OfflineTrack findById(String videoId) {
-        for (OfflineTrack t : tracks) if (t.videoId().equals(videoId)) return t;
+        if (videoId == null) return null;
+        OfflineTrack t = TRACK_BY_ID.get(videoId);
+        if (t != null) return t;
+        if (TRACK_BY_ID.isEmpty() && !tracks.isEmpty()) {
+            rebuildTrackIndex();
+            return TRACK_BY_ID.get(videoId);
+        }
         return null;
     }
 
@@ -926,19 +1010,52 @@ public final class LocalDownloadsUIState {
         return t.durationSeconds() <= 0 || t.title().isBlank() || t.title().equals(t.videoId()) || t.audioFile().length() < 32 * 1024;
     }
 
+    // YENİ: ListRenderer rebuild öncesi çağırmalı (rowViews.clear() sonrası)
+    // Böylece markPlayingRow fast-path'i yanlışlıkla skip etmez.
+    public static void resetRowMarkCache() {
+        lastMarkedPlayingPath = "";
+        lastMarkedRowCount = 0;
+    }
+
     public static void markPlayingRow(Context ctx) {
         if (ctx == null) return;
+
+        // YENİ: Fast-path — playing path değişmediyse ve seçim modu yoksa hiçbir şey yapma.
+        // Önceden her playback tick'inde (400ms) 500 satır × RippleDrawable allocation vardı.
+        if (!selectionMode
+                && playingPath.equals(lastMarkedPlayingPath)
+                && rowViews.size() == lastMarkedRowCount
+                && lastMarkedRowCount > 0) {
+            return;
+        }
+
         int idx = queuePaths.indexOf(playingPath);
         for (int i = 0; i < rowViews.size(); i++) {
             boolean isSel = i < currentDisplayedTracks.size() && selectedVideoIds.contains(currentDisplayedTracks.get(i).videoId());
             rowViews.get(i).setBackground(rowBackground(ctx, i == idx || isSel));
         }
+        lastMarkedPlayingPath = playingPath;
+        lastMarkedRowCount = rowViews.size();
     }
+
+    // ==== YENİ: String.format yerine manuel — saniyede 3-4 kez çağrılıyordu ====
 
     public static String formatDuration(int s) {
         if (s <= 0) return "0:00";
-        return s < 3600 ? String.format(Locale.ROOT, "%d:%02d", s / 60, s % 60)
-                : String.format(Locale.ROOT, "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60);
+        int h = s / 3600;
+        int m = (s % 3600) / 60;
+        int sec = s % 60;
+        StringBuilder sb = new StringBuilder(8);
+        if (h > 0) {
+            sb.append(h).append(':');
+            if (m < 10) sb.append('0');
+            sb.append(m).append(':');
+        } else {
+            sb.append(m).append(':');
+        }
+        if (sec < 10) sb.append('0');
+        sb.append(sec);
+        return sb.toString();
     }
 
     public static String formatLongDuration(int seconds) {
@@ -948,12 +1065,29 @@ public final class LocalDownloadsUIState {
         return Math.max(1, m) + " dk";
     }
 
-    public static String formatSize(long b) { return String.format(Locale.ROOT, "%.1f", b / 1048576.0); }
+    // YENİ: %.1f yerine manuel yuvarlama
+    public static String formatSize(long b) {
+        if (b <= 0) return "0.0";
+        // (b / 1048576.0) * 10 yuvarlanmış → tamsayı
+        long tenths = (b * 10 + 524288L) / 1048576L;
+        return (tenths / 10) + "." + (tenths % 10);
+    }
 
+    // YENİ: %.2f ve %d yerine manuel
     public static String formatSpeed(long bytesPerSec) {
         if (bytesPerSec <= 0) return "0 KB/sn";
-        if (bytesPerSec >= 1048576L) return String.format(Locale.ROOT, "%.2f MB/sn", bytesPerSec / 1048576.0);
-        return String.format(Locale.ROOT, "%d KB/sn", Math.max(1L, bytesPerSec / 1024L));
+        if (bytesPerSec >= 1048576L) {
+            long hundredths = (bytesPerSec * 100 + 524288L) / 1048576L;
+            long whole = hundredths / 100;
+            long frac = hundredths % 100;
+            StringBuilder sb = new StringBuilder(12);
+            sb.append(whole).append('.');
+            if (frac < 10) sb.append('0');
+            sb.append(frac).append(" MB/sn");
+            return sb.toString();
+        }
+        long kb = Math.max(1L, bytesPerSec / 1024L);
+        return kb + " KB/sn";
     }
 
     public static void hideHostActionBar(Activity act) {
@@ -1003,18 +1137,89 @@ public final class LocalDownloadsUIState {
 
     private static SharedPreferences effectsPrefs(Context ctx) { return ctx.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE); }
 
+    // ==== YENİ: Sıcak pref'ler için volatile cache ====
+    // Bu 5 pref playback tick'inde (400ms) en az bir kez okunuyordu.
+    // SharedPreferences.get zaten in-memory HashMap ama her çağrıda lock + lookup var.
+    // Artık ilk okumadan sonra volatile alandan O(1) okunuyor.
+
     public static boolean isEffectsMasterEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_EFFECTS_MASTER_KEY, true); } catch (Exception ignored) { return true; }
+        if (effectsMasterReady) return effectsMasterCached;
+        try {
+            boolean v = effectsPrefs(ctx).getBoolean(PREF_EFFECTS_MASTER_KEY, true);
+            effectsMasterCached = v;
+            effectsMasterReady = true;
+            return v;
+        } catch (Exception ignored) { return true; }
     }
     public static void setEffectsMasterEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_EFFECTS_MASTER_KEY, enabled).apply(); } catch (Exception ignored) {}
+        try {
+            effectsPrefs(ctx).edit().putBoolean(PREF_EFFECTS_MASTER_KEY, enabled).apply();
+            effectsMasterCached = enabled;
+            effectsMasterReady = true;
+        } catch (Exception ignored) {}
     }
+
     public static boolean isLowPowerMode(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_LOW_POWER_MODE_KEY, false); } catch (Exception ignored) { return false; }
+        if (lowPowerReady) return lowPowerCached;
+        try {
+            boolean v = effectsPrefs(ctx).getBoolean(PREF_LOW_POWER_MODE_KEY, false);
+            lowPowerCached = v;
+            lowPowerReady = true;
+            return v;
+        } catch (Exception ignored) { return false; }
     }
     public static void setLowPowerMode(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_LOW_POWER_MODE_KEY, enabled).apply(); } catch (Exception ignored) {}
+        try {
+            effectsPrefs(ctx).edit().putBoolean(PREF_LOW_POWER_MODE_KEY, enabled).apply();
+            lowPowerCached = enabled;
+            lowPowerReady = true;
+        } catch (Exception ignored) {}
     }
+
+    public static boolean isPlayerCoverBreathingEnabled(Context ctx) {
+        if (coverBreathingReady) return coverBreathingCached;
+        try {
+            boolean v = effectsPrefs(ctx).getBoolean("player_cover_breathing", true);
+            coverBreathingCached = v;
+            coverBreathingReady = true;
+            return v;
+        } catch (Exception ignored) { return true; }
+    }
+
+    public static boolean isCrossfadeEnabled(Context ctx) {
+        if (crossfadeEnabledReady) return crossfadeEnabledCached;
+        try {
+            boolean v = effectsPrefs(ctx).getBoolean(PREF_CROSSFADE_ENABLED, false);
+            crossfadeEnabledCached = v;
+            crossfadeEnabledReady = true;
+            return v;
+        } catch (Exception ignored) { return false; }
+    }
+    public static void setCrossfadeEnabled(Context ctx, boolean enabled) {
+        try {
+            effectsPrefs(ctx).edit().putBoolean(PREF_CROSSFADE_ENABLED, enabled).apply();
+            crossfadeEnabledCached = enabled;
+            crossfadeEnabledReady = true;
+        } catch (Exception ignored) {}
+    }
+
+    public static boolean isSleepFadeEnabled(Context ctx) {
+        if (sleepFadeEnabledReady) return sleepFadeEnabledCached;
+        try {
+            boolean v = effectsPrefs(ctx).getBoolean(PREF_SLEEP_FADE_ENABLED, true);
+            sleepFadeEnabledCached = v;
+            sleepFadeEnabledReady = true;
+            return v;
+        } catch (Exception ignored) { return true; }
+    }
+    public static void setSleepFadeEnabled(Context ctx, boolean enabled) {
+        try {
+            effectsPrefs(ctx).edit().putBoolean(PREF_SLEEP_FADE_ENABLED, enabled).apply();
+            sleepFadeEnabledCached = enabled;
+            sleepFadeEnabledReady = true;
+        } catch (Exception ignored) {}
+    }
+
     public static boolean isFocusMode(Context ctx) {
         try { return effectsPrefs(ctx).getBoolean(PREF_FOCUS_MODE_KEY, false); } catch (Exception ignored) { return false; }
     }
@@ -1066,20 +1271,11 @@ public final class LocalDownloadsUIState {
         long scaled = Math.round(baseMs / scale);
         return Math.max(40L, scaled);
     }
-    public static boolean isPlayerCoverBreathingEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean("player_cover_breathing", true); } catch (Exception ignored) { return true; }
-    }
     public static boolean isPlayerDynamicColorsEnabled(Context ctx) {
         try { return effectsPrefs(ctx).getBoolean("player_dynamic_artwork_colors", true); } catch (Exception ignored) { return true; }
     }
     public static boolean isPlayerCinematicTransitionsEnabled(Context ctx) {
         try { return effectsPrefs(ctx).getBoolean("player_cinematic_transitions", true); } catch (Exception ignored) { return true; }
-    }
-    public static boolean isCrossfadeEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_CROSSFADE_ENABLED, false); } catch (Exception ignored) { return false; }
-    }
-    public static void setCrossfadeEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_CROSSFADE_ENABLED, enabled).apply(); } catch (Exception ignored) {}
     }
     public static int getCrossfadeSeconds(Context ctx) {
         try { return effectsPrefs(ctx).getInt(PREF_CROSSFADE_SECONDS, 5); } catch (Exception ignored) { return 5; }
@@ -1087,12 +1283,7 @@ public final class LocalDownloadsUIState {
     public static void setCrossfadeSeconds(Context ctx, int seconds) {
         try { effectsPrefs(ctx).edit().putInt(PREF_CROSSFADE_SECONDS, seconds).apply(); } catch (Exception ignored) {}
     }
-    public static boolean isSleepFadeEnabled(Context ctx) {
-        try { return effectsPrefs(ctx).getBoolean(PREF_SLEEP_FADE_ENABLED, true); } catch (Exception ignored) { return true; }
-    }
-    public static void setSleepFadeEnabled(Context ctx, boolean enabled) {
-        try { effectsPrefs(ctx).edit().putBoolean(PREF_SLEEP_FADE_ENABLED, enabled).apply(); } catch (Exception ignored) {}
-    }
+
     public static BackgroundColorMode getBackgroundColorMode(Context ctx) {
         try {
             String raw = effectsPrefs(ctx).getString(PREF_BG_COLOR_MODE_KEY, BackgroundColorMode.THEME.name());
@@ -1126,8 +1317,6 @@ public final class LocalDownloadsUIState {
             effectsPrefs(ctx).edit().putFloat(PREF_VIBRANCY_KEY, clamped).apply();
         } catch (Exception ignored) {}
     }
-
-    // ==== YENİ: EQ / BassBoost / Hız / Hız Limiti yardımcıları ====
 
     public static boolean isEqEnabled(Context ctx) {
         try { return effectsPrefs(ctx).getBoolean(PREF_EQ_ENABLED, false); } catch (Exception ignored) { return false; }
@@ -1296,6 +1485,12 @@ public final class LocalDownloadsUIState {
             e.putInt(PREF_CUSTOM_COLOR2_KEY, profile.customColor2());
             e.putFloat(PREF_VIBRANCY_KEY, Math.max(MIN_VIBRANCY, Math.min(MAX_VIBRANCY, profile.vibrancy())));
             e.apply();
+            // Cache'leri invalidate et (profil değişti)
+            effectsMasterReady = false;
+            lowPowerReady = false;
+            coverBreathingReady = false;
+            crossfadeEnabledReady = false;
+            sleepFadeEnabledReady = false;
             return true;
         } catch (Exception ignored) { return false; }
     }

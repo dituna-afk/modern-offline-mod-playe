@@ -25,6 +25,8 @@ public final class OfflineTrack {
 
     private final File audioFile;
     private final String videoId;
+    // YENİ: equals/hashCode için önbelleğe alınmış path
+    private final String cachedPath;
 
     private String title;
     private String artist;
@@ -33,8 +35,7 @@ public final class OfflineTrack {
     private long lastPlayedAt;
     private int playCount;
     private int nightPlayCount;
-    
-    // YENİ: Zengin Meta Veriler
+
     private String releaseYear;
     private String genre;
     private String label;
@@ -42,6 +43,8 @@ public final class OfflineTrack {
 
     private OfflineTrack(File audioFile) {
         this.audioFile = audioFile;
+        // YENİ: getAbsolutePath her equals/hashCode çağrısında string concat yapıyordu.
+        this.cachedPath = audioFile.getAbsolutePath();
         String name = audioFile.getName();
         int dot = name.lastIndexOf('.');
         this.videoId = dot > 0 ? name.substring(0, dot) : name;
@@ -79,8 +82,7 @@ public final class OfflineTrack {
             lastPlayedAt = json.optLong("lastPlayedAt", 0L);
             playCount = json.optInt("playCount", 0);
             nightPlayCount = json.optInt("nightPlayCount", 0);
-            
-            // Yeni alanlar
+
             releaseYear = json.optString("releaseYear", "");
             genre = json.optString("genre", "");
             label = json.optString("label", "");
@@ -101,13 +103,12 @@ public final class OfflineTrack {
             json.put("lastPlayedAt", lastPlayedAt);
             json.put("playCount", playCount);
             json.put("nightPlayCount", nightPlayCount);
-            
-            // Yeni alanlar
+
             json.put("releaseYear", releaseYear == null ? "" : releaseYear);
             json.put("genre", genre == null ? "" : genre);
             json.put("label", label == null ? "" : label);
             json.put("credits", credits == null ? "" : credits);
-            
+
             OfflineStorage.writeText(metadataFile(), json.toString());
         } catch (Exception ex) {
             Logger.printException(() -> "Could not write track metadata: " + videoId, ex);
@@ -144,7 +145,6 @@ public final class OfflineTrack {
         }
     }
 
-    // YENİ: YT Music'ten çekilen zengin meta verileri kaydeder
     public void setExtendedMetadata(String year, String genre, String label, String credits) {
         this.releaseYear = year == null ? "" : year;
         this.genre = genre == null ? "" : genre;
@@ -188,8 +188,7 @@ public final class OfflineTrack {
     public long lastPlayedAt() { return lastPlayedAt; }
     public int playCount() { return playCount; }
     public int nightPlayCount() { return nightPlayCount; }
-    
-    // Yeni alanların getter'ları
+
     public String releaseYear() { return releaseYear == null || releaseYear.isBlank() ? "Bilinmiyor" : releaseYear; }
     public String genre() { return genre == null || genre.isBlank() ? "Bilinmiyor" : genre; }
     public String label() { return label == null || label.isBlank() ? "Bilinmiyor" : label; }
@@ -289,11 +288,12 @@ public final class OfflineTrack {
     public boolean equals(@Nullable Object o) {
         if (this == o) return true;
         if (!(o instanceof OfflineTrack other)) return false;
-        return audioFile.getAbsolutePath().equals(other.audioFile.getAbsolutePath());
+        // YENİ: cached path karşılaştırması
+        return cachedPath.equals(other.cachedPath);
     }
 
     @Override
     public int hashCode() {
-        return audioFile.getAbsolutePath().hashCode();
+        return cachedPath.hashCode();
     }
 }

@@ -22,15 +22,6 @@ import java.util.Set;
 
 import app.morphe.extension.shared.Logger;
 
-/**
- * Dosya sistemi, playlist yönetimi, akıllı listeler ve sanatçı kartları için
- * merkezi depolama sınıfı.
- *
- * <p>Playlistler {@code musicRoot/playlists.json} içinde saklanır. Akıllı
- * listeler ({@link #buildSmartPlaylists}) hiçbir zaman diske yazılmaz; her
- * çağrıldığında mevcut {@link OfflineTrack} verilerinden dinamik olarak
- * hesaplanır. "Tüm Şarkılar" da aynı şekilde dinamik üretilir.</p>
- */
 public final class OfflineStorage {
 
     public static final String SPECIAL_ALL_SONGS = "Tüm Şarkılar";
@@ -48,13 +39,11 @@ public final class OfflineStorage {
     private static final String JSON_COVER_PATH = "coverPath";
     private static final String JSON_VIDEO_IDS = "videoIds";
 
-    /**
-     * @param name       Görünen isim ("Tüm Şarkılar", "Beğenilenler", kullanıcı listeleri...)
-     * @param remoteId   Uzak liste ID'si (YouTube Music/YT playlist id), boş olabilir
-     * @param videoIds   Listedeki video ID'leri, sırayla
-     * @param coverPath  Özel kapak dosyası yolu, boşsa varsayılan 4'lü kolaj kullanılır
-     * @param isSmart    true ise bu dinamik hesaplanmış bir liste (diske yazılmaz)
-     */
+    // YENİ: mtime cache — playlists.json her op'ta tam parse edilmesin
+    private static volatile List<Playlist> cachedPlaylists;
+    private static volatile long cachedPlaylistsMtime = -1L;
+    private static volatile String cachedPlaylistsPath = "";
+
     public record Playlist(
             String name,
             String remoteId,
@@ -69,7 +58,6 @@ public final class OfflineStorage {
     // DOSYA OKUMA / YAZMA / SİLME
     // =====================================================================================
 
-    /** UTF-8 dosyayı okur. Dosya yoksa veya hata olursa null döner. */
     @Nullable
     public static String readText(File file) {
         if (file == null || !file.isFile()) return null;
@@ -86,7 +74,6 @@ public final class OfflineStorage {
         }
     }
 
-    /** UTF-8 metni dosyaya yazar. Hata durumunda sessizce loglar. */
     public static void writeText(File file, String text) {
         if (file == null || text == null) return;
         try {
@@ -100,7 +87,6 @@ public final class OfflineStorage {
         }
     }
 
-    /** Bitmap'i JPEG olarak diske yazar (kalite %92). */
     public static void writeJpeg(File file, Bitmap bitmap) {
         if (file == null || bitmap == null) return;
         try {
@@ -114,7 +100,6 @@ public final class OfflineStorage {
         }
     }
 
-    /** Belirtilen dosyayı siler. Dosya değilse veya yoksa sessizce geçer. */
     public static void delete(@Nullable File file) {
         if (file == null) return;
         try {
@@ -122,11 +107,6 @@ public final class OfflineStorage {
         } catch (Exception ignored) {}
     }
 
-    /**
-     * JPEG/PNG dosyasını örnekleme (inSampleSize) kullanarak yükler.
-     * Bellek dostudur; büyük kapaklar için uygundur. {@code maxSize}'ı aşmayacak
-     * şekilde 2'nin kuvveti ile küçültme yapar.
-     */
     @Nullable
     public static Bitmap decodeArtwork(@Nullable File file, int maxSize) {
         if (file == null || !file.isFile() || maxSize <= 0) return null;
@@ -152,26 +132,51 @@ public final class OfflineStorage {
     }
 
     // =====================================================================================
-    // PLAYLIST YÖNETİMİ (JSON KALICILIĞI)
+    // PLAYLIST YÖNETİMİ (JSON KALICILIĞI + MTIME CACHE)
     // =====================================================================================
 
     /**
-     * Diskteki tüm kullanıcı playlistlerini yükler. "Tüm Şarkılar" ve akıllı
-     * listeler burada dönmez; onlar {@link #buildPrimaryLibraryGrid} ve
-     * {@link #buildSmartPlaylists} ile dinamik üretilir.
+     * Diskteki tüm kullanıcı playlistlerini yükler.
+     *
+     * <p><b>YENİ:</b> mtime cache — dosya son değiştirilme zamanı değişmediyse
+     * cached kopya döner. Önceden her {@code createPlaylist} /
+     * {@code addTrackToPlaylist} / {@code removeTrackFromPlaylist} /
+     * {@code getMissingVideoIds} çağrısında tüm JSON parse ediliyordu.</p>
      */
     public static List<Playlist> loadPlaylists(@Nullable File musicRoot) {
-        List<Playlist> result = new ArrayList<>();
-        if (musicRoot == null) return result;
+        if (musicRoot == null) return new ArrayList<>();
         File file = new File(musicRoot, PLAYLISTS_FILE);
-        if (!file.isFile()) return result;
+        if (!file.isFile()) {
+            cachedPlaylists = null;
+            cachedPlaylistsMtime = -1L;
+            cachedPlaylistsPath = "";
+            return new ArrayList<>();
+        }
 
+        long mtime = file.lastModified();
+        String path = file.getAbsolutePath();
+        List<Playlist> cached = cachedPlaylists;
+        if (cached != null && mtime == cachedPlaylistsMtime && path.equals(cachedPlaylistsPath)) {
+            return new ArrayList<>(cached);
+        }
+
+        List<Playlist> result = new ArrayList<>();
         try {
             String raw = readText(file);
-            if (raw == null || raw.isBlank()) return result;
+            if (raw == null || raw.isBlank()) {
+                cachedPlaylists = result;
+                cachedPlaylistsMtime = mtime;
+                cachedPlaylistsPath = path;
+                return new ArrayList<>(result);
+            }
             JSONObject root = new JSONObject(raw);
             JSONArray arr = root.optJSONArray(JSON_PLAYLISTS_ARRAY);
-            if (arr == null) return result;
+            if (arr == null) {
+                cachedPlaylists = result;
+                cachedPlaylistsMtime = mtime;
+                cachedPlaylistsPath = path;
+                return new ArrayList<>(result);
+            }
 
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject o = arr.optJSONObject(i);
@@ -192,13 +197,16 @@ public final class OfflineStorage {
                 }
                 result.add(new Playlist(name, remoteId, ids, coverPath, false));
             }
+
+            cachedPlaylists = result;
+            cachedPlaylistsMtime = mtime;
+            cachedPlaylistsPath = path;
         } catch (Exception e) {
             Logger.printException(() -> "Could not parse playlists.json", e);
         }
-        return result;
+        return new ArrayList<>(result);
     }
 
-    /** Playlist listesini JSON'a yazar. Akıllı listeler atlanır. */
     private static void savePlaylists(@Nullable File musicRoot, List<Playlist> playlists) {
         if (musicRoot == null) return;
         try {
@@ -217,16 +225,24 @@ public final class OfflineStorage {
                 arr.put(o);
             }
             root.put(JSON_PLAYLISTS_ARRAY, arr);
-            writeText(new File(musicRoot, PLAYLISTS_FILE), root.toString());
+            File file = new File(musicRoot, PLAYLISTS_FILE);
+            writeText(file, root.toString());
+            // YENİ: Cache'i hemen güncelle (file.lastModified() bazen 1sn gecikmeli)
+            cachedPlaylists = new ArrayList<>(playlists);
+            cachedPlaylistsMtime = file.lastModified();
+            cachedPlaylistsPath = file.getAbsolutePath();
         } catch (Exception e) {
             Logger.printException(() -> "Could not save playlists.json", e);
         }
     }
 
-    /**
-     * Listeyi oluşturur; zaten varsa {@code remoteId}'yi günceller. Liste
-     * adları büyük/küçük harf duyarsızdır.
-     */
+    /** Dış bir kaynak playlists.json'ı değiştirdiyse cache'i temizle. */
+    public static void invalidatePlaylistsCache() {
+        cachedPlaylists = null;
+        cachedPlaylistsMtime = -1L;
+        cachedPlaylistsPath = "";
+    }
+
     public static void createPlaylist(@Nullable File musicRoot, String name, String remoteId) {
         if (musicRoot == null || name == null || name.isBlank()) return;
         List<Playlist> all = loadPlaylists(musicRoot);
@@ -247,7 +263,6 @@ public final class OfflineStorage {
         savePlaylists(musicRoot, all);
     }
 
-    /** Tek bir şarkıyı listeye ekler. Zaten varsa false döner. */
     public static boolean addTrackToPlaylist(@Nullable File musicRoot, String name, String videoId) {
         if (videoId == null || videoId.isBlank()) return false;
         List<String> wrapper = new ArrayList<>();
@@ -255,7 +270,6 @@ public final class OfflineStorage {
         return addTracksToPlaylist(musicRoot, name, wrapper) > 0;
     }
 
-    /** Birden çok şarkıyı ekler; eklenen yeni şarkı sayısını döner. */
     public static int addTracksToPlaylist(@Nullable File musicRoot, String name, List<String> videoIds) {
         if (musicRoot == null || name == null || name.isBlank()
                 || videoIds == null || videoIds.isEmpty()) return 0;
@@ -292,7 +306,6 @@ public final class OfflineStorage {
         return added;
     }
 
-    /** Şarkıyı listeden çıkarır. Listede yoksa false döner. */
     public static boolean removeTrackFromPlaylist(@Nullable File musicRoot, String name, String videoId) {
         if (musicRoot == null || name == null || videoId == null) return false;
         List<Playlist> all = loadPlaylists(musicRoot);
@@ -310,7 +323,6 @@ public final class OfflineStorage {
         return false;
     }
 
-    /** Şarkıyı tüm kullanıcı listelerinden siler (dosya silme işlemi yapmaz). */
     public static void removeTrackFromAllPlaylists(@Nullable File musicRoot, String videoId) {
         if (musicRoot == null || videoId == null) return;
         List<Playlist> all = loadPlaylists(musicRoot);
@@ -326,7 +338,6 @@ public final class OfflineStorage {
         if (changed) savePlaylists(musicRoot, all);
     }
 
-    /** Listeyi ve varsa özel kapak dosyasını siler. */
     public static void deletePlaylist(@Nullable File musicRoot, String name) {
         if (musicRoot == null || name == null) return;
         List<Playlist> all = loadPlaylists(musicRoot);
@@ -350,11 +361,6 @@ public final class OfflineStorage {
         savePlaylists(musicRoot, all);
     }
 
-    /**
-     * Kapak yolunu günceller. {@code path} boşsa varsayılan 4'lü kolaj
-     * kullanılır. Eski kapak bizim ürettiğimiz {@code playlist_cover_*.jpg}
-     * ise temizlenir; başka bir şarkının kapağıysa dokunulmaz.
-     */
     public static void setPlaylistCoverPath(@Nullable File musicRoot, String name, String path) {
         if (musicRoot == null || name == null) return;
         List<Playlist> all = loadPlaylists(musicRoot);
@@ -376,15 +382,10 @@ public final class OfflineStorage {
             return;
         }
 
-        // Liste yoksa oluştur ve kapağı ata
         all.add(new Playlist(name, "", new ArrayList<>(), newPath, false));
         savePlaylists(musicRoot, all);
     }
 
-    /**
-     * Bir Bitmap'i {@code playlist_cover_<safeName>.jpg} olarak kaydedip
-     * playlist kapağı olarak atar.
-     */
     public static void setPlaylistCoverBitmap(@Nullable File musicRoot, String name, @Nullable Bitmap bmp) {
         if (musicRoot == null || name == null || bmp == null) return;
         String safeName = name.replaceAll("[^a-zA-Z0-9_-]", "_");
@@ -398,17 +399,12 @@ public final class OfflineStorage {
     // ŞARKI VAR MI / EKSİK ID'LER
     // =====================================================================================
 
-    /** Video ID için audio dosyası (webm veya m4a) cihazda var mı? */
     public static boolean isTrackDownloaded(@Nullable File musicRoot, @Nullable String videoId) {
         if (musicRoot == null || videoId == null || videoId.isBlank()) return false;
         return new File(musicRoot, videoId + ".webm").isFile()
                 || new File(musicRoot, videoId + ".m4a").isFile();
     }
 
-    /**
-     * Belirtilen listedeki (1-tabanlı start/end aralığında) henüz indirilmemiş
-     * şarkıların video ID'lerini döner. {@code end=0} ise sonuna kadar.
-     */
     public static List<String> getMissingVideoIds(@Nullable File musicRoot, @Nullable String name,
                                                   int startOneBased, int endOneBased) {
         List<String> result = new ArrayList<>();
@@ -421,7 +417,6 @@ public final class OfflineStorage {
                 break;
             }
         }
-        // "Tüm Şarkılar" dinamik; yeni şarkı indirilecekse burada iş yok.
         if (target == null) return result;
 
         List<String> ids = target.videoIds();
@@ -440,12 +435,9 @@ public final class OfflineStorage {
     }
 
     // =====================================================================================
-    // AGGREGATORS (KİTAPLIK / AKILLI / SANATÇI)
+    // AGGREGATORS
     // =====================================================================================
 
-    /**
-     * Kitaplıktaki ana ızgara: [Tüm Şarkılar] + [Beğenilenler (varsa)] + kullanıcı listeleri.
-     */
     public static List<Playlist> buildPrimaryLibraryGrid(List<OfflineTrack> tracks,
                                                          @Nullable List<Playlist> userPlaylists) {
         List<Playlist> result = new ArrayList<>();
@@ -473,15 +465,10 @@ public final class OfflineStorage {
         return result;
     }
 
-    /**
-     * 4 akıllı koleksiyon: En Çok Dinlenenler, Son İndirilenler, Gece Dinlenenler,
-     * Hiç Dinlenmeyenler. Diske yazılmaz.
-     */
     public static List<Playlist> buildSmartPlaylists(@Nullable List<OfflineTrack> tracks) {
         List<Playlist> result = new ArrayList<>();
         if (tracks == null) tracks = new ArrayList<>();
 
-        // En Çok Dinlenenler
         List<OfflineTrack> byPlay = new ArrayList<>(tracks);
         byPlay.sort((a, b) -> Integer.compare(b.playCount(), a.playCount()));
         List<String> mostPlayed = new ArrayList<>();
@@ -491,7 +478,6 @@ public final class OfflineStorage {
         }
         result.add(new Playlist("En Çok Dinlenenler", SMART_MOST_PLAYED, mostPlayed, "", true));
 
-        // Son İndirilenler
         List<OfflineTrack> byDate = new ArrayList<>(tracks);
         byDate.sort((a, b) -> Long.compare(b.audioFile().lastModified(), a.audioFile().lastModified()));
         List<String> recent = new ArrayList<>();
@@ -500,7 +486,6 @@ public final class OfflineStorage {
         }
         result.add(new Playlist("Son İndirilenler", SMART_RECENTLY_ADDED, recent, "", true));
 
-        // Gece Dinlenenler
         List<OfflineTrack> nightTracks = new ArrayList<>();
         for (OfflineTrack t : tracks) {
             if (t.nightPlayCount() > 0) nightTracks.add(t);
@@ -512,7 +497,6 @@ public final class OfflineStorage {
         }
         result.add(new Playlist("Gece Dinlenenler", SMART_NIGHT_PLAYS, night, "", true));
 
-        // Hiç Dinlenmeyenler
         List<String> never = new ArrayList<>();
         for (OfflineTrack t : tracks) {
             if (t.playCount() == 0) never.add(t.videoId());
@@ -522,10 +506,6 @@ public final class OfflineStorage {
         return result;
     }
 
-    /**
-     * Sanatçı adına göre gruplanmış listeler. Her sanatçı için bir tane.
-     * Sanatçı adı boş olanlar atlanır. Sıralama Türkçe harflere duyarlı değildir.
-     */
     public static List<Playlist> buildArtistCards(@Nullable List<OfflineTrack> tracks) {
         List<Playlist> result = new ArrayList<>();
         if (tracks == null) return result;
@@ -539,7 +519,6 @@ public final class OfflineStorage {
             byArtist.computeIfAbsent(artist, k -> new ArrayList<>()).add(t.videoId());
         }
 
-        // Alfabetik sıralama (küçük/büyük harf duyarsız)
         List<Map.Entry<String, List<String>>> entries = new ArrayList<>(byArtist.entrySet());
         entries.sort((a, b) -> a.getKey().toLowerCase(Locale.ROOT)
                 .compareTo(b.getKey().toLowerCase(Locale.ROOT)));
@@ -554,10 +533,6 @@ public final class OfflineStorage {
     // YARDIMCILAR
     // =====================================================================================
 
-    /**
-     * Playlist içindeki benzersiz video ID'lerini döner (sırayı korur).
-     * Savunma amaçlı: JSON bozulması olsa bile tekrarları temizler.
-     */
     public static List<String> uniqueIds(Playlist p) {
         if (p == null) return new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>(p.videoIds());

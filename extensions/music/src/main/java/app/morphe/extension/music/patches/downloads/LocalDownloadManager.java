@@ -10,7 +10,11 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.webkit.CookieManager;
 
 import androidx.annotation.Nullable;
@@ -73,14 +77,6 @@ public final class LocalDownloadManager {
         void onProgress(int current, int total, int successCount);
     }
 
-    /**
-     * Söz kaynakları — SADECE iki ana kaynak:
-     *  - LRCLIB (senkronize söz, zaman damgalı)
-     *  - YouTube Music (resmi sözler, genelde düz metin)
-     *
-     * <p>Diğer sağlayıcılar (Genius, Musixmatch, Deezer, NetEase, Lyrics.ovh, Lyrist)
-     * güvenilir çalışmadığı için kaldırıldı.</p>
-     */
     public enum LyricsSource {
         AUTO_ALL("Otomatik (LRCLIB → YT Music)"),
         LRCLIB("LRCLIB (Senkronize Söz)"),
@@ -116,19 +112,39 @@ public final class LocalDownloadManager {
     }
 
     private static final Set<DownloadListener> LISTENERS = new CopyOnWriteArraySet<>();
-    private static final ExecutorService PLAYLIST_QUEUE_EXECUTOR = Executors.newSingleThreadExecutor();
-    private static final ExecutorService SINGLE_DOWNLOAD_EXECUTOR = Executors.newFixedThreadPool(2);
-    private static final ExecutorService SEGMENT_POOL = Executors.newFixedThreadPool(8);
+
+    // Thread factory: daemon threads → uygulama kapanırken JVM beklemez
+    private static java.util.concurrent.ThreadFactory daemon(String name) {
+        return r -> {
+            Thread t = new Thread(r, name);
+            t.setDaemon(true);
+            return t;
+        };
+    }
+
+    private static final ExecutorService PLAYLIST_QUEUE_EXECUTOR =
+            Executors.newSingleThreadExecutor(daemon("morphe-playlist-q"));
+    // Paralel indirme: 2 şarkı aynı anda
+    private static final ExecutorService SINGLE_DOWNLOAD_EXECUTOR =
+            Executors.newFixedThreadPool(2, daemon("morphe-download"));
+    // Segment pool: aynı anda en fazla 8 segment açık (2 indirme × 4 segment)
+    private static final ExecutorService SEGMENT_POOL =
+            Executors.newFixedThreadPool(8, daemon("morphe-segment"));
+    // YENİ: Söz/çeviri ayrı pool — indirme kuyruğunu tıkamaz
+    private static final ExecutorService LYRICS_EXECUTOR =
+            Executors.newFixedThreadPool(2, daemon("morphe-lyrics"));
 
     private static final String DOWNLOAD_CHANNEL = "morphe_audio_downloads";
     private static final String USER_AGENT = "com.google.android.youtube/19.47.53 (Linux; U; Android 14) gzip";
     private static final String WEB_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
-    private static final int SEGMENT_COUNT = 4;
+    // YENİ: Statik default, adaptif segment sayısı (getSegmentCount) ile override
+    private static final int DEFAULT_SEGMENT_COUNT = 4;
     private static final int BUFFER_SIZE = 64 * 1024;
 
     private static final long NOTIFICATION_INTERVAL_MILLISECONDS = 850;
     private static final AtomicLong lastNotificationTime = new AtomicLong();
+    private static final Handler MAIN_HANDLER = new Handler(Looper.getMainLooper());
 
     private static final int CONNECT_TIMEOUT_MILLISECONDS = 15_000;
     private static final int READ_TIMEOUT_MILLISECONDS = 30_000;
@@ -143,6 +159,10 @@ public final class LocalDownloadManager {
     private static final long BASE_BACKOFF_MS = 500L;
     private static final long MAX_BACKOFF_MS = 30_000L;
 
+    // YENİ: Queue persist debounce — 500ms window
+    private static final long PERSIST_DEBOUNCE_MS = 500L;
+    private static final AtomicBoolean persistPending = new AtomicBoolean(false);
+
     private static final Pattern VIDEO_ID = Pattern.compile("[A-Za-z0-9_-]{1,20}");
     private static final Pattern PLAYLIST_PARAM = Pattern.compile("[?&]list=([A-Za-z0-9_-]+)");
     private static final Pattern BROWSE_PLAYLIST = Pattern.compile("(?:/playlist/|/browse/)(VL[A-Za-z0-9_-]+|PL[A-Za-z0-9_-]+|OLAK[A-Za-z0-9_-]+|LM|LL)");
@@ -151,17 +171,25 @@ public final class LocalDownloadManager {
     private static final Pattern DIRECT_VIDEO_ID = Pattern.compile("(?:v=|youtu\\.be/|/watch\\?v=|/shorts/)([A-Za-z0-9_-]{11})");
     private static final Pattern SAPISID_PATTERN = Pattern.compile("(?:^|;\\s*)(?:__Secure-3PAPISID|SAPISID)=([^;]+)");
     private static final Pattern NON_QU_Q_PATTERN = Pattern.compile("(?i)q(?!u)");
+    // YENİ: LRC zaman damgası regex'i derlendi (önceden her satırda replaceAll)
+    private static final Pattern LRC_TIME_PATTERN = Pattern.compile("\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]");
+    private static final Pattern MULTI_WHITESPACE = Pattern.compile("\\s+");
 
     private static final String THUMBNAIL_URL = "https://i.ytimg.com/vi/";
 
     private static final Set<String> ACTIVE_DOWNLOADS = ConcurrentHashMap.newKeySet();
-    private static final Map<String, QueueItem> QUEUE_MAP = Collections.synchronizedMap(new LinkedHashMap<>());
-    private static final Map<String, QueueItem> FAILED_MAP = Collections.synchronizedMap(new LinkedHashMap<>());
+    // YENİ: synchronized(LinkedHashMap) — Collections.synchronizedMap yerine
+    // atomik putQueueItem için
+    private static final Map<String, QueueItem> QUEUE_MAP = new LinkedHashMap<>();
+    private static final Map<String, QueueItem> FAILED_MAP = new LinkedHashMap<>();
     private static final Set<String> CANCELLED_IDS = ConcurrentHashMap.newKeySet();
     private static final Set<String> ACTIVE_PLAYLIST_JOBS = ConcurrentHashMap.newKeySet();
     private static final AtomicInteger CANCEL_EPOCH = new AtomicInteger(0);
     private static final AtomicBoolean PAUSED = new AtomicBoolean(false);
     private static final AtomicInteger COMPLETED_SESSION_COUNT = new AtomicInteger(0);
+
+    // YENİ: Bildirim kanalı önbelleği (her notification'da createChannel çağrısını önler)
+    private static volatile boolean notificationChannelCreated = false;
 
     private LocalDownloadManager() {}
 
@@ -169,8 +197,12 @@ public final class LocalDownloadManager {
     public static void removeListener(DownloadListener listener) { LISTENERS.remove(listener); }
     public static boolean isDownloading(String videoId) { return ACTIVE_DOWNLOADS.contains(videoId); }
     public static int getActiveDownloadCount() { return ACTIVE_DOWNLOADS.size(); }
-    public static int getTotalQueueCount() { return QUEUE_MAP.size(); }
-    public static int getFailedDownloadCount() { return FAILED_MAP.size(); }
+    public static int getTotalQueueCount() {
+        synchronized (QUEUE_MAP) { return QUEUE_MAP.size(); }
+    }
+    public static int getFailedDownloadCount() {
+        synchronized (FAILED_MAP) { return FAILED_MAP.size(); }
+    }
     public static int getCompletedSessionCount() { return COMPLETED_SESSION_COUNT.get(); }
     public static boolean isPaused() { return PAUSED.get(); }
 
@@ -187,9 +219,14 @@ public final class LocalDownloadManager {
         synchronized (FAILED_MAP) { return new ArrayList<>(FAILED_MAP.values()); }
     }
 
+    // YENİ: Snapshot kopyalamadan direkt iterate — 800'lük kuyrukta anlamlı
     public static long getTotalActiveSpeedBytesPerSec() {
         long total = 0L;
-        for (QueueItem item : getQueueSnapshot()) if (item.active()) total += item.speedBytesPerSec();
+        synchronized (QUEUE_MAP) {
+            for (QueueItem item : QUEUE_MAP.values()) {
+                if (item.active()) total += item.speedBytesPerSec();
+            }
+        }
         return total;
     }
 
@@ -210,7 +247,7 @@ public final class LocalDownloadManager {
 
     public static int retryFailedDownloads() {
         List<QueueItem> failedList = getFailedSnapshot();
-        FAILED_MAP.clear();
+        synchronized (FAILED_MAP) { FAILED_MAP.clear(); }
         int count = 0;
         for (QueueItem item : failedList) {
             enqueue(item.videoId(), item.playlistName(), false);
@@ -222,7 +259,7 @@ public final class LocalDownloadManager {
     }
 
     public static void clearFailedDownloads() {
-        FAILED_MAP.clear();
+        synchronized (FAILED_MAP) { FAILED_MAP.clear(); }
         saveQueuePersist();
         notifyListeners("", false);
     }
@@ -230,8 +267,8 @@ public final class LocalDownloadManager {
     public static void removeFromQueue(String videoId) {
         if (videoId == null || videoId.isEmpty()) return;
         CANCELLED_IDS.add(videoId);
-        QUEUE_MAP.remove(videoId);
-        FAILED_MAP.remove(videoId);
+        synchronized (QUEUE_MAP) { QUEUE_MAP.remove(videoId); }
+        synchronized (FAILED_MAP) { FAILED_MAP.remove(videoId); }
         ACTIVE_DOWNLOADS.remove(videoId);
         saveQueuePersist();
         notifyListeners(videoId, false);
@@ -240,8 +277,8 @@ public final class LocalDownloadManager {
     public static void cancelAllDownloads(@Nullable File musicRoot) {
         CANCEL_EPOCH.incrementAndGet();
         PAUSED.set(false);
-        QUEUE_MAP.clear();
-        FAILED_MAP.clear();
+        synchronized (QUEUE_MAP) { QUEUE_MAP.clear(); }
+        synchronized (FAILED_MAP) { FAILED_MAP.clear(); }
         ACTIVE_DOWNLOADS.clear();
         ACTIVE_PLAYLIST_JOBS.clear();
         CANCELLED_IDS.clear();
@@ -263,7 +300,18 @@ public final class LocalDownloadManager {
         notifyListeners("", true);
     }
 
+    // YENİ: Debounced persist — 500ms içindeki ardışık çağrılar tek yazıya indirgenir.
+    // 800'lük kuyrukta downloadBlocking finally'de her track'te çağrılıyordu;
+    // bu 40 MB/sn disk yazımına yol açıyordu.
     private static void saveQueuePersist() {
+        if (persistPending.getAndSet(true)) return;
+        MAIN_HANDLER.postDelayed(() -> {
+            persistPending.set(false);
+            doSaveQueuePersist();
+        }, PERSIST_DEBOUNCE_MS);
+    }
+
+    private static void doSaveQueuePersist() {
         try {
             Context ctx = Utils.getContext();
             if (ctx == null) return;
@@ -307,7 +355,11 @@ public final class LocalDownloadManager {
                 final String title = o.optString("title", vid);
                 final String playlist = o.optString("playlist", "Tekli İndirme");
                 if (vid.isEmpty()) continue;
-                if (ACTIVE_DOWNLOADS.contains(vid) || QUEUE_MAP.containsKey(vid)) continue;
+                boolean skip;
+                synchronized (QUEUE_MAP) {
+                    skip = ACTIVE_DOWNLOADS.contains(vid) || QUEUE_MAP.containsKey(vid);
+                }
+                if (skip) continue;
                 File musicRoot = new File(ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Morphe");
                 if (OfflineStorage.isTrackDownloaded(musicRoot, vid)) continue;
                 putQueueItem(vid, title, playlist, 0, false, 0L, 0L, 0L);
@@ -323,16 +375,20 @@ public final class LocalDownloadManager {
         } catch (Exception ignored) {}
     }
 
+    // YENİ: Atomic — tek lock altında get+put (yarış koşulu fix).
+    // 4 segment thread'i aynı anda yazıyordu, önceki kodda 3 update kayboluyordu.
     private static void putQueueItem(String videoId, String title, @Nullable String playlist,
                                      int progress, boolean active, long downloadedBytes,
                                      long totalBytes, long speedBytesPerSec) {
-        QueueItem existing = QUEUE_MAP.get(videoId);
-        String resolvedTitle = (title != null && !title.isBlank()) ? title
-                : (existing != null ? existing.title() : videoId);
-        String resolvedPl = (playlist != null && !playlist.isBlank()) ? playlist
-                : (existing != null ? existing.playlistName() : "Tekli İndirme");
-        QUEUE_MAP.put(videoId, new QueueItem(videoId, resolvedTitle, resolvedPl,
-                progress, active, downloadedBytes, totalBytes, speedBytesPerSec, false));
+        synchronized (QUEUE_MAP) {
+            QueueItem existing = QUEUE_MAP.get(videoId);
+            String resolvedTitle = (title != null && !title.isBlank()) ? title
+                    : (existing != null ? existing.title() : videoId);
+            String resolvedPl = (playlist != null && !playlist.isBlank()) ? playlist
+                    : (existing != null ? existing.playlistName() : "Tekli İndirme");
+            QUEUE_MAP.put(videoId, new QueueItem(videoId, resolvedTitle, resolvedPl,
+                    progress, active, downloadedBytes, totalBytes, speedBytesPerSec, false));
+        }
     }
 
     private static void awaitIfPaused(int epoch, String videoId) throws InterruptedException {
@@ -371,7 +427,7 @@ public final class LocalDownloadManager {
             alreadyQueued = ACTIVE_DOWNLOADS.contains(videoId) || QUEUE_MAP.containsKey(videoId);
             if (!alreadyQueued) {
                 CANCELLED_IDS.remove(videoId);
-                FAILED_MAP.remove(videoId);
+                synchronized (FAILED_MAP) { FAILED_MAP.remove(videoId); }
                 QUEUE_MAP.put(videoId, new QueueItem(videoId, videoId,
                         targetPlaylistName == null || targetPlaylistName.isBlank() ? "Tekli İndirme" : targetPlaylistName,
                         0, false, 0L, 0L, 0L, false));
@@ -417,6 +473,8 @@ public final class LocalDownloadManager {
             }
         });
     }
+
+    // ---------- AYARLAR ----------
 
     public static LyricsSource getSavedLyricsSource() {
         try {
@@ -503,10 +561,6 @@ public final class LocalDownloadManager {
         } catch (Exception ignored) {}
     }
 
-    /**
-     * Tüm .lrc dosyalarını siler ve AUTO_ALL (LRCLIB → YT Music) sırasına göre
-     * tüm şarkıların sözlerini yeniden çeker. Bulunanlar otomatik çevrilir.
-     */
     public static int resetAllLyricsAndReFetch(File directory, List<OfflineTrack> tracks,
                                                @Nullable BulkLyricsProgressListener listener) {
         if (directory == null || !directory.isDirectory()) return 0;
@@ -543,7 +597,7 @@ public final class LocalDownloadManager {
                         track.displayTitle(),
                         track.displayArtist(),
                         track.durationSeconds(),
-                        LyricsSource.AUTO_ALL,       // LRCLIB → YT Music sırası
+                        LyricsSource.AUTO_ALL,
                         engine,
                         deeplKey,
                         true
@@ -584,7 +638,7 @@ public final class LocalDownloadManager {
         int checkedLines = 0, threeWordWeirdLines = 0;
         for (String rawLine : lines) {
             if (rawLine.contains("└")) continue;
-            String clean = rawLine.replaceAll("\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", "").trim();
+            String clean = LRC_TIME_PATTERN.matcher(rawLine).replaceAll("").trim();
             if (clean.isEmpty() || clean.startsWith("[")) continue;
             checkedLines++;
             String[] words = clean.split("\\s+");
@@ -623,7 +677,7 @@ public final class LocalDownloadManager {
 
     public static boolean isAlreadyTurkishText(@Nullable String text) {
         if (text == null || text.isBlank()) return false;
-        String clean = text.replaceAll("\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]", "").replaceAll("└.*", "");
+        String clean = LRC_TIME_PATTERN.matcher(text).replaceAll("").replaceAll("└.*", "");
         int trSpecificChars = 0;
         for (int i = 0; i < clean.length(); i++) {
             char c = clean.charAt(i);
@@ -805,20 +859,10 @@ public final class LocalDownloadManager {
         return sb.toString().trim();
     }
 
-    /**
-     * Seçilen kaynağa göre söz çeker.
-     *
-     * <p><b>Sıra:</b></p>
-     * <ol>
-     *   <li>LRCLIB (senkronize söz) — zaman damgalı, öncelikli</li>
-     *   <li>YouTube Music (resmi sözler) — yedek, genelde düz metin</li>
-     * </ol>
-     */
     @Nullable
     private static String fetchFromSelectedSource(LyricsSource source, String videoId, String cleanTitle, String cleanArtist, int durationSeconds) {
         String content = null;
 
-        // 1) LRCLIB — senkronize söz, öncelikli kaynak
         if (source == LyricsSource.LRCLIB || source == LyricsSource.AUTO_ALL) {
             try { content = tryFetchLrclibExact(cleanTitle, cleanArtist, durationSeconds); } catch (Exception ignored) {}
             if (content == null || content.isBlank()) {
@@ -829,7 +873,6 @@ public final class LocalDownloadManager {
             if (source == LyricsSource.LRCLIB) return null;
         }
 
-        // 2) YouTube Music — yedek kaynak
         if (source == LyricsSource.YOUTUBE_MUSIC || source == LyricsSource.AUTO_ALL) {
             try { content = tryFetchYtMusicLyrics(videoId); } catch (Exception ignored) {}
             if (content != null && !content.isBlank() && !isGibberishOrCorruptedLyrics(content)) return content;
@@ -838,14 +881,6 @@ public final class LocalDownloadManager {
         return null;
     }
 
-    /**
-     * YouTube Music sözlerini çeker.
-     *
-     * <p><b>Not:</b> YT Music'in {@code musicDescriptionShelfRenderer} alanı
-     * genellikle <b>düz metin</b> döner (zaman damgası yok). Bazı şarkılarda
-     * continuation veya MPLYt browse endpoint'i zamanlı veri döndürebilir ama
-     * bu garanti değildir. Zaman damgalı söz için LRCLIB öncelikli kaynaktır.</p>
-     */
     @Nullable
     private static String tryFetchYtMusicLyrics(String videoId) {
         if (videoId == null || videoId.isBlank()) return null;
@@ -1063,7 +1098,7 @@ public final class LocalDownloadManager {
         cleaned = cleaned.replaceAll("(?i)\\s*\\[(official\\s+)?(music\\s+)?video\\]\\s*$", "");
         cleaned = cleaned.replaceAll("(?i)\\s*\\((lyrics?|audio|visuali[sz]er|official audio|lyric video|slowed|reverb)\\)\\s*$", "");
         cleaned = cleaned.replaceAll("(?i)\\s*\\[(lyrics?|audio|visuali[sz]er|official audio|lyric video|slowed|reverb)\\]\\s*$", "");
-        return cleaned.replaceAll("\\s+", " ").trim();
+        return MULTI_WHITESPACE.matcher(cleaned).replaceAll(" ").trim();
     }
 
     private static String tryFetchLrclibExact(String title, String artist, int durationSeconds) throws IOException, org.json.JSONException {
@@ -1382,7 +1417,11 @@ public final class LocalDownloadManager {
                 try {
                     if (CANCEL_EPOCH.get() != epoch) return;
                     List<String> missing = OfflineStorage.getMissingVideoIds(fMusicRoot, fPlaylistName, fStart, fEnd);
-                    missing.removeIf(id -> ACTIVE_DOWNLOADS.contains(id) || QUEUE_MAP.containsKey(id));
+                    missing.removeIf(id -> {
+                        synchronized (QUEUE_MAP) {
+                            return ACTIVE_DOWNLOADS.contains(id) || QUEUE_MAP.containsKey(id);
+                        }
+                    });
                     if (missing.isEmpty()) {
                         if (fNotify) Utils.runOnMainThread(() -> Utils.showToastShort("Seçilen aralıktaki şarkılar zaten indirilmiş"));
                         return;
@@ -1396,7 +1435,10 @@ public final class LocalDownloadManager {
                     if (fNotify) Utils.runOnMainThread(() -> Utils.showToastShort(missing.size() + " şarkı kuyruğa eklendi"));
                     for (final String videoId : missing) {
                         if (CANCEL_EPOCH.get() != epoch) return;
-                        if (CANCELLED_IDS.remove(videoId)) { QUEUE_MAP.remove(videoId); continue; }
+                        if (CANCELLED_IDS.remove(videoId)) {
+                            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(videoId); }
+                            continue;
+                        }
                         awaitIfPaused(epoch, videoId);
                         downloadBlocking(epoch, videoId, null, null, null, 0, null, fPlaylistName, false);
                     }
@@ -1441,7 +1483,9 @@ public final class LocalDownloadManager {
 
                     List<String> toDownload = new ArrayList<>();
                     for (String id : allIds) {
-                        if (!OfflineStorage.isTrackDownloaded(fMusicRoot, id) && !QUEUE_MAP.containsKey(id)) {
+                        boolean alreadyQueued;
+                        synchronized (QUEUE_MAP) { alreadyQueued = QUEUE_MAP.containsKey(id); }
+                        if (!OfflineStorage.isTrackDownloaded(fMusicRoot, id) && !alreadyQueued) {
                             CANCELLED_IDS.remove(id);
                             putQueueItem(id, id, "Kütüphane Toplu", 0, false, 0L, 0L, 0L);
                             toDownload.add(id);
@@ -1461,7 +1505,10 @@ public final class LocalDownloadManager {
                     int count = 0;
                     for (final String id : toDownload) {
                         if (CANCEL_EPOCH.get() != epoch) return;
-                        if (CANCELLED_IDS.remove(id)) { QUEUE_MAP.remove(id); continue; }
+                        if (CANCELLED_IDS.remove(id)) {
+                            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(id); }
+                            continue;
+                        }
                         awaitIfPaused(epoch, id);
                         count++;
                         final int index = count;
@@ -1524,7 +1571,9 @@ public final class LocalDownloadManager {
                     OfflineStorage.addTracksToPlaylist(fMusicRoot, fPlaylistName, resolvedIds);
                     List<String> toDownload = new ArrayList<>();
                     for (final String id : resolvedIds) {
-                        if (!OfflineStorage.isTrackDownloaded(fMusicRoot, id) && !QUEUE_MAP.containsKey(id)) {
+                        boolean alreadyQueued;
+                        synchronized (QUEUE_MAP) { alreadyQueued = QUEUE_MAP.containsKey(id); }
+                        if (!OfflineStorage.isTrackDownloaded(fMusicRoot, id) && !alreadyQueued) {
                             CANCELLED_IDS.remove(id);
                             putQueueItem(id, id, fPlaylistName, 0, false, 0L, 0L, 0L);
                             toDownload.add(id);
@@ -1543,7 +1592,10 @@ public final class LocalDownloadManager {
                     int count = 0;
                     for (final String id : toDownload) {
                         if (CANCEL_EPOCH.get() != epoch) return;
-                        if (CANCELLED_IDS.remove(id)) { QUEUE_MAP.remove(id); continue; }
+                        if (CANCELLED_IDS.remove(id)) {
+                            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(id); }
+                            continue;
+                        }
                         awaitIfPaused(epoch, id);
                         count++;
                         final int index = count;
@@ -1726,11 +1778,28 @@ public final class LocalDownloadManager {
         }
     }
 
+    // YENİ: Ağ tipine göre adaptif segment sayısı — mobilde 2, Wi-Fi'de 4
+    private static int getSegmentCount() {
+        try {
+            Context ctx = Utils.getContext();
+            if (ctx == null) return DEFAULT_SEGMENT_COUNT;
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm == null) return DEFAULT_SEGMENT_COUNT;
+            NetworkCapabilities caps = cm.getNetworkCapabilities(cm.getActiveNetwork());
+            if (caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return DEFAULT_SEGMENT_COUNT;
+            }
+            return 2;
+        } catch (Exception e) {
+            return 3;
+        }
+    }
+
     private static void downloadBlocking(int epoch, String videoId, @Nullable String title, @Nullable String artist,
                                          @Nullable String album, int duration, @Nullable Bitmap artwork,
                                          @Nullable String targetPlaylistName, boolean showToasts) {
         if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.remove(videoId)) {
-            QUEUE_MAP.remove(videoId);
+            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(videoId); }
             saveQueuePersist();
             notifyListeners(videoId, false);
             return;
@@ -1741,7 +1810,7 @@ public final class LocalDownloadManager {
 
         if (targetPlaylistName != null && !targetPlaylistName.isBlank()) OfflineStorage.addTrackToPlaylist(directory, targetPlaylistName, videoId);
         if (OfflineStorage.isTrackDownloaded(directory, videoId)) {
-            QUEUE_MAP.remove(videoId);
+            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(videoId); }
             saveQueuePersist();
             if (showToasts) Utils.showToastShort(str("morphe_music_downloads_already_saved"));
             notifyListeners(videoId, true);
@@ -1791,20 +1860,35 @@ public final class LocalDownloadManager {
 
             OfflineTrack.save(directory, videoId, finalTitle, finalArtist, album, duration, artwork);
 
-            JSONObject ytMeta = tryFetchYtMusicMetadata(videoId);
-            if (ytMeta != null) {
-                OfflineTrack tr = OfflineTrack.load(destination);
-                tr.setExtendedMetadata(
-                        ytMeta.optString("year", ""),
-                        ytMeta.optString("genre", ""),
-                        ytMeta.optString("label", ""),
-                        ytMeta.optString("credits", "")
-                );
-            }
+            // Metadata fetch (blocking) — YT Music API
+            final String finalTitleForMeta = finalTitle;
+            final String finalArtistForMeta = finalArtist;
+            final int finalDuration = duration;
+            try {
+                JSONObject ytMeta = tryFetchYtMusicMetadata(videoId);
+                if (ytMeta != null) {
+                    OfflineTrack tr = OfflineTrack.load(destination);
+                    tr.setExtendedMetadata(
+                            ytMeta.optString("year", ""),
+                            ytMeta.optString("genre", ""),
+                            ytMeta.optString("label", ""),
+                            ytMeta.optString("credits", "")
+                    );
+                }
+            } catch (Exception ignored) {}
 
-            fetchAndSaveSyncedLyrics(directory, videoId, finalTitle, finalArtist, duration);
+            // YENİ: Söz/çeviri fetch'i ARTIK AYRI POOL — indirme kuyruğunu tıkamaz.
+            // Önceki kod indirme thread'ini çeviri bitene kadar bloke ediyordu.
+            LYRICS_EXECUTOR.submit(() -> {
+                try {
+                    fetchAndSaveSyncedLyrics(directory, videoId, finalTitleForMeta, finalArtistForMeta, finalDuration);
+                } catch (Exception ex) {
+                    Logger.printDebug(() -> "Async lyrics fetch failed: " + videoId, ex);
+                }
+            });
+
             COMPLETED_SESSION_COUNT.incrementAndGet();
-            FAILED_MAP.remove(videoId);
+            synchronized (FAILED_MAP) { FAILED_MAP.remove(videoId); }
             if (showToasts) Utils.showToastShort(str("morphe_music_downloads_complete"));
         } catch (InterruptedException cancelledEx) {
             if (temporary != null) OfflineStorage.delete(temporary);
@@ -1812,15 +1896,16 @@ public final class LocalDownloadManager {
             if (temporary != null) OfflineStorage.delete(temporary);
             if (CANCEL_EPOCH.get() == epoch && !CANCELLED_IDS.contains(videoId)) {
                 String failedTitle = finalTitle != null && !finalTitle.isBlank() ? finalTitle : videoId;
-                FAILED_MAP.put(videoId, new QueueItem(videoId, failedTitle, targetPlaylistName != null ? targetPlaylistName : "Tekli İndirme", 0, false, 0L, 0L, 0L, true));
+                synchronized (FAILED_MAP) {
+                    FAILED_MAP.put(videoId, new QueueItem(videoId, failedTitle, targetPlaylistName != null ? targetPlaylistName : "Tekli İndirme", 0, false, 0L, 0L, 0L, true));
+                }
                 Logger.printException(() -> "Local audio download failed: " + videoId, ex);
-                awaitNotificationSlot();
                 showDownloadNotification(videoId, finalTitle, 0, false, str("morphe_music_downloads_failed"));
                 if (showToasts) Utils.showToastShort(str("morphe_music_downloads_failed"));
             }
         } finally {
             ACTIVE_DOWNLOADS.remove(videoId);
-            QUEUE_MAP.remove(videoId);
+            synchronized (QUEUE_MAP) { QUEUE_MAP.remove(videoId); }
             CANCELLED_IDS.remove(videoId);
             saveQueuePersist();
             notifyListeners(videoId, true);
@@ -1846,18 +1931,9 @@ public final class LocalDownloadManager {
         return now - previous >= NOTIFICATION_INTERVAL_MILLISECONDS && lastNotificationTime.compareAndSet(previous, now);
     }
 
-    private static void awaitNotificationSlot() {
-        while (true) {
-            long now = System.currentTimeMillis();
-            long previous = lastNotificationTime.get();
-            long remaining = NOTIFICATION_INTERVAL_MILLISECONDS - (now - previous);
-            if (remaining <= 0) {
-                if (lastNotificationTime.compareAndSet(previous, now)) return;
-                continue;
-            }
-            try { Thread.sleep(remaining); } catch (InterruptedException ex) { Thread.currentThread().interrupt(); return; }
-        }
-    }
+    // awaitNotificationSlot KALDIRILDI — eskiden 850ms'e kadar Thread.sleep yapıyordu.
+    // Kuyrukta 100 şarkı × 2 çağrı = ~85 saniye boşa bekleme. Yerine canPostProgress
+    // gate'i hem putQueueItem'ı hem notifyListeners'ı hem notification'ı sınırlıyor.
 
     @Nullable
     private static Bitmap resolveArtwork(String videoId, VideoDetails details) {
@@ -1892,7 +1968,6 @@ public final class LocalDownloadManager {
     private static void downloadWithResume(int epoch, String videoId, String title, @Nullable String playlistName,
                                            String url, File temporary, long expectedLength, boolean showToasts) throws Exception {
         if (showToasts) Utils.showToastShort(str("morphe_music_downloads_started"));
-        awaitNotificationSlot();
         showDownloadNotification(videoId, title, 0, true, str("morphe_music_downloads_starting"));
 
         if (expectedLength <= 0) expectedLength = probeContentLength(url);
@@ -1907,7 +1982,6 @@ public final class LocalDownloadManager {
         if (CANCEL_EPOCH.get() != epoch || CANCELLED_IDS.contains(videoId)) throw new InterruptedException("Download cancelled");
         if (totalLength > 0 && temporary.length() != totalLength) throw new IllegalStateException("Incomplete audio file");
 
-        awaitNotificationSlot();
         showDownloadNotification(videoId, title, 100, false, str("morphe_music_downloads_complete"));
     }
 
@@ -1916,10 +1990,12 @@ public final class LocalDownloadManager {
         try (RandomAccessFile file = new RandomAccessFile(temporary, "rw")) { file.setLength(totalLength); }
         final long startTimeMs = System.currentTimeMillis();
         final AtomicLong downloaded = new AtomicLong();
-        long segmentSize = (totalLength + SEGMENT_COUNT - 1) / SEGMENT_COUNT;
 
-        List<Future<?>> futures = new ArrayList<>(SEGMENT_COUNT);
-        for (int index = 0; index < SEGMENT_COUNT; index++) {
+        final int segmentCount = getSegmentCount();
+        final long segmentSize = (totalLength + segmentCount - 1) / segmentCount;
+
+        List<Future<?>> futures = new ArrayList<>(segmentCount);
+        for (int index = 0; index < segmentCount; index++) {
             final long start = index * segmentSize;
             final long end = Math.min(totalLength - 1, start + segmentSize - 1);
             if (start > end) continue;
@@ -1929,11 +2005,13 @@ public final class LocalDownloadManager {
                     try {
                         downloadRange(epoch, videoId, url, temporary, start, end, downloaded, new ProgressCallback() {
                             @Override public void update(long bytes) {
+                                // YENİ: putQueueItem + notifyListeners da canPostProgress gate'inde.
+                                // Önceki kod her 64KB chunk'ta putQueueItem çağırıyordu → saniyede 40 map write.
+                                if (!canPostProgress()) return;
                                 int progress = (int) Math.min(99, bytes * 100 / totalLength);
                                 long elapsedMs = Math.max(1L, System.currentTimeMillis() - startTimeMs);
                                 long speedBps = (bytes * 1000L) / elapsedMs;
                                 putQueueItem(videoId, title, playlistName, progress, true, bytes, totalLength, speedBps);
-                                if (!canPostProgress()) return;
                                 notifyListeners(videoId, false);
                                 showDownloadNotification(videoId, title, progress, true, str("morphe_music_downloads_progress", progress));
                             }
@@ -1956,7 +2034,8 @@ public final class LocalDownloadManager {
 
         Context ctx = Utils.getContext();
         int rateLimitKbps = ctx != null ? LocalDownloadsUIState.getRateLimitKbps(ctx) : 0;
-        long rateLimitBytesPerSec = rateLimitKbps > 0 ? (rateLimitKbps * 1024L) / SEGMENT_COUNT : 0L;
+        int segments = Math.max(1, getSegmentCount());
+        long rateLimitBytesPerSec = rateLimitKbps > 0 ? (rateLimitKbps * 1024L) / segments : 0L;
         long lastRateCheck = System.currentTimeMillis();
         long bytesInWindow = 0L;
 
@@ -2081,7 +2160,11 @@ public final class LocalDownloadManager {
         Context context = Utils.getContext();
         NotificationManager manager = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
-        manager.createNotificationChannel(new NotificationChannel(DOWNLOAD_CHANNEL, str("morphe_music_downloads_notification_channel"), NotificationManager.IMPORTANCE_LOW));
+        // YENİ: Kanal sadece bir kez oluşturulur (önceden her notification'da)
+        if (!notificationChannelCreated) {
+            manager.createNotificationChannel(new NotificationChannel(DOWNLOAD_CHANNEL, str("morphe_music_downloads_notification_channel"), NotificationManager.IMPORTANCE_LOW));
+            notificationChannelCreated = true;
+        }
         Notification.Builder builder = new Notification.Builder(context, DOWNLOAD_CHANNEL);
         builder.setSmallIcon(ongoing ? android.R.drawable.stat_sys_download : android.R.drawable.stat_sys_download_done)
                 .setContentTitle(title == null || title.isBlank() ? "YouTube Music" : title)

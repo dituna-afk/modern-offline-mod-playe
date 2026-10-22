@@ -4,6 +4,8 @@ import android.app.ActionBar;
 import android.app.Activity;
 import android.graphics.Rect;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
@@ -18,20 +20,27 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class OfflineHeaderBlocker {
 
     private static final Map<View, SavedViewState> HIDDEN_VIEWS = new IdentityHashMap<>();
     private static final Map<View, Boolean> HOOKED_DOWNLOAD_TABS = new IdentityHashMap<>();
 
-    /**
-     * YT Music'in "İndirilenler" çipine art arda iki kez basılmasını
-     * engelleyen zaman damgası. Double-tap koruması için kullanılır.
-     */
+    // YENİ: Sweep debounce
+    private static final Handler SWEEP_HANDLER = new Handler(Looper.getMainLooper());
+    private static final AtomicBoolean sweepScheduled = new AtomicBoolean(false);
+    private static volatile long lastSweepTimeMs = 0L;
+    private static final long SWEEP_COOLDOWN_MS = 300L;
+
+    // YENİ: getResourceEntryName cache
+    private static final Map<Integer, String> RESOURCE_NAME_CACHE = new HashMap<>();
+
     private static long lastDownloadsTabTapMs = 0L;
 
     private static ViewTreeObserver.OnGlobalLayoutListener offlineLayoutListener;
@@ -66,10 +75,6 @@ public final class OfflineHeaderBlocker {
 
     private OfflineHeaderBlocker() {}
 
-    /**
-     * Online moddayken "İndirilenler / Downloads" çipine basıldığında
-     * YT Music'in o çipi seçili bırakmasını engeller ve doğrudan Offline oynatıcıyı açar.
-     */
     public static void installOnlineDownloadsInterceptor(Activity activity) {
         if (activity == null || activity.getWindow() == null) return;
         View decor = activity.getWindow().getDecorView();
@@ -94,18 +99,6 @@ public final class OfflineHeaderBlocker {
         }
     }
 
-    /**
-     * "İndirilenler" çipini bulup, tıklama sırasında YT Music'in kendi
-     * onTouch davranışını tamamen yutar ve doğrudan Offline fragment'ı açar.
-     *
-     * <p><b>Double-tap koruması:</b> Aynı çipe 400ms içinde ikinci kez
-     * dokunulursa ikinci dokunuş sessizce yutulur. Bu, kullanıcı arayüzünün
-     * yanlışlıkla iki kez açılmasını engeller.</p>
-     *
-     * <p><b>Güvenlik:</b> ACTION_DOWN, ACTION_MOVE, ACTION_CANCEL ve
-     * ACTION_UP durumları eksiksiz yakalanır. ACTION_MOVE sırasında YT Music'in
-     * kaydırma hareketi başlatması imkansız hale gelir.</p>
-     */
     private static void hookOnlineDownloadsButtons(Activity activity, ViewGroup root) {
         for (int i = 0; i < root.getChildCount(); i++) {
             View child = root.getChildAt(i);
@@ -129,7 +122,6 @@ public final class OfflineHeaderBlocker {
                             return true;
                         }
                         if (action == MotionEvent.ACTION_MOVE) {
-                            // YT Music'in kaydırma / tıklama girişimini tamamen yut
                             return true;
                         }
                         if (action == MotionEvent.ACTION_CANCEL) {
@@ -140,7 +132,6 @@ public final class OfflineHeaderBlocker {
                         if (action == MotionEvent.ACTION_UP) {
                             long now = System.currentTimeMillis();
                             if (now - lastDownloadsTabTapMs < 400L) {
-                                // Double-tap koruması — ikinci tıklamayı sessizce yut
                                 v.setPressed(false);
                                 v.setSelected(false);
                                 return true;
@@ -161,11 +152,6 @@ public final class OfflineHeaderBlocker {
         }
     }
 
-    /**
-     * Çevrimdışı moddan Ana Sayfa düğmesiyle çıkıldığında:
-     * 1. Kitaplık'taki "İndirilenler" çipinin solundaki 'X' (kapat) butonuna basarak seçimi kaldırır.
-     * 2. YT Music'in alt barındaki ilk sekmeye (Ana Sayfa) tıklayarak gerçek Ana Sayfa'ya döner.
-     */
     public static void resetOnlineChipAndNavigateHome(Activity activity) {
         if (activity == null || activity.getWindow() == null) return;
         View decor = activity.getWindow().getDecorView();
@@ -196,7 +182,6 @@ public final class OfflineHeaderBlocker {
                 chipContainer.setActivated(false);
                 chipContainer.setPressed(false);
 
-                // Çip şeridinde "İndirilenler"in hemen solundaki 'X' (Filtreyi temizle) butonunu bul ve tıkla
                 ViewParent stripParent = chipContainer.getParent();
                 if (stripParent instanceof ViewGroup chipStrip) {
                     for (int i = 0; i < chipStrip.getChildCount(); i++) {
@@ -277,10 +262,6 @@ public final class OfflineHeaderBlocker {
         return view;
     }
 
-    /**
-     * Bildirim çubuğunu (Status Bar) gizler veya geri açar.
-     * Kullanıcı ekranın en üstünden aşağı kaydırırsa geçici olarak görünür.
-     */
     @SuppressWarnings("deprecation")
     public static void applyImmersiveFullscreen(Window window, boolean fullscreen) {
         if (window == null) return;
@@ -336,7 +317,6 @@ public final class OfflineHeaderBlocker {
         customRootLayout.setElevation(100f);
         customRootLayout.setTranslationZ(100f);
 
-        // Tam ekran modunda bildirim paneli gizlendiği için üst ve alt boşlukları tamamen sıfırla
         customRootLayout.setFitsSystemWindows(false);
         customRootLayout.setPadding(0, 0, 0, 0);
         customRootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -346,21 +326,16 @@ public final class OfflineHeaderBlocker {
 
         installHardBackButtonLock(activity);
 
-        runSweep(activity, customRootLayout);
+        // YENİ: Debounce'lu sweep
+        scheduleSweep(activity, customRootLayout);
         immediateSweepRunnable = () -> {
-            if (isCurrentOfflineRoot(activity, customRootLayout)) {
-                runSweep(activity, customRootLayout);
-            }
+            if (isCurrentOfflineRoot(activity, customRootLayout)) scheduleSweep(activity, customRootLayout);
         };
         delayedSweep120Runnable = () -> {
-            if (isCurrentOfflineRoot(activity, customRootLayout)) {
-                runSweep(activity, customRootLayout);
-            }
+            if (isCurrentOfflineRoot(activity, customRootLayout)) scheduleSweep(activity, customRootLayout);
         };
         delayedSweep320Runnable = () -> {
-            if (isCurrentOfflineRoot(activity, customRootLayout)) {
-                runSweep(activity, customRootLayout);
-            }
+            if (isCurrentOfflineRoot(activity, customRootLayout)) scheduleSweep(activity, customRootLayout);
         };
         customRootLayout.post(immediateSweepRunnable);
         customRootLayout.postDelayed(delayedSweep120Runnable, 120);
@@ -376,15 +351,43 @@ public final class OfflineHeaderBlocker {
                         customRootLayout.setVisibility(View.VISIBLE);
                     }
                     applyImmersiveFullscreen(activity.getWindow(), true);
-                    runSweep(activity, customRootLayout);
+                    // YENİ: Debounce — layout pass başına değil, 300ms cooldown ile
+                    scheduleSweep(activity, customRootLayout);
                 }
             };
             decor.getViewTreeObserver().addOnGlobalLayoutListener(offlineLayoutListener);
         }
     }
 
+    /**
+     * YENİ: Sweep debounce.
+     *
+     * <p>Önceki sorun: {@code OnGlobalLayoutListener} her layout pass'te tetikleniyordu ve
+     * sweep kendisi de layout değiştirdiği için feedback loop oluşuyordu. Kaydırma sırasında
+     * saniyede 10-20 sweep çalışıyordu.</p>
+     *
+     * <p>Çözüm: 300ms cooldown. Cooldown içindeki tüm istekler tek sweep'te birleşir.</p>
+     */
+    private static void scheduleSweep(Activity activity, View customRootLayout) {
+        long now = System.currentTimeMillis();
+        if (now - lastSweepTimeMs < SWEEP_COOLDOWN_MS) return;
+        if (!sweepScheduled.compareAndSet(false, true)) return;
+
+        SWEEP_HANDLER.post(() -> {
+            sweepScheduled.set(false);
+            if (!isCurrentOfflineRoot(activity, customRootLayout)) return;
+            lastSweepTimeMs = System.currentTimeMillis();
+            runSweep(activity, customRootLayout);
+        });
+    }
+
     public static void detach(Activity activity) {
         offlineScreenActive = false;
+        // YENİ: Pending sweep'i iptal et
+        SWEEP_HANDLER.removeCallbacksAndMessages(null);
+        sweepScheduled.set(false);
+        lastSweepTimeMs = 0L;
+
         removePendingSweeps();
         offlineRootLayout = null;
         detachOfflineListenerOnly();
@@ -598,7 +601,6 @@ public final class OfflineHeaderBlocker {
                 continue;
             }
 
-            // Doğrudan "İndirilenler" başlık metnini içeren üst bar kapsayıcısını yakala ve gizle
             if (child instanceof TextView tv && isDownloadsCategoryText(tv.getText())) {
                 View headerContainer = findHeaderBarContainer(tv, customRoot);
                 out.add(headerContainer != null ? headerContainer : tv);
@@ -608,14 +610,12 @@ public final class OfflineHeaderBlocker {
             if (child.getVisibility() == View.VISIBLE && child.getHeight() > 0) {
                 Rect r = new Rect();
                 if (child.getGlobalVisibleRect(r)) {
-                    // Ekranın en üst şeridinde yer alan tüm yabancı host barlarını (<- İndirilenler dahil) gizle
                     if (r.top <= dp(child, 60) && r.bottom <= maxHeaderBottomY && child.getHeight() <= dp(child, 95)) {
                         if (containsOfflineTitleText(child) || hasBackNavigationIcon(child)) {
                             out.add(child);
                             continue;
                         }
                     }
-                    // Ekranın en altında yer kaplayan YT Music alt barını gizle
                     if (r.top >= screenH - dp(child, 110) && child.getHeight() <= dp(child, 90)) {
                         out.add(child);
                         continue;
@@ -705,11 +705,16 @@ public final class OfflineHeaderBlocker {
         return id.contains("status_bar") || id.contains("navigation_bar") || id.contains("system_bar");
     }
 
+    // YENİ: Resource name cache — her layout pass'te tekrar tekrar reflection lookup yapılmasın
     private static String getResourceName(View v) {
         try {
-            if (v.getId() != View.NO_ID && v.getResources() != null) {
-                return v.getResources().getResourceEntryName(v.getId()).toLowerCase(Locale.ROOT);
-            }
+            int id = v.getId();
+            if (id == View.NO_ID || v.getResources() == null) return "";
+            String cached = RESOURCE_NAME_CACHE.get(id);
+            if (cached != null) return cached;
+            String name = v.getResources().getResourceEntryName(id).toLowerCase(Locale.ROOT);
+            RESOURCE_NAME_CACHE.put(id, name);
+            return name;
         } catch (Exception ignored) {}
         return "";
     }

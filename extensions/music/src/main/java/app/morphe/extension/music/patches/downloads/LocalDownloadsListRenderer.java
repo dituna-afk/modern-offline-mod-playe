@@ -36,8 +36,6 @@ public final class LocalDownloadsListRenderer {
 
     private static final int PAGE_SIZE = 40;
     private static final int BOTTOM_TRIGGER_DP = 600;
-    
-    private static final Map<ScrollView, Boolean> LAZY_LISTENERS_INSTALLED = new HashMap<>();
 
     private LocalDownloadsListRenderer() {}
 
@@ -47,6 +45,9 @@ public final class LocalDownloadsListRenderer {
         LocalDownloadsUIState.loadTracksIfNeeded(musicRoot);
         LocalDownloadsUIState.songsList.removeAllViews();
         LocalDownloadsUIState.rowViews.clear();
+        // YENİ: markPlayingRow fast-path cache'ini sıfırla. Aksi halde re-render
+        // sonrası aynı playing track için "değişmedi" sanılıp highlight silinirdi.
+        LocalDownloadsUIState.resetRowMarkCache();
         LocalDownloadsUIState.queuePaths = new ArrayList<>();
         LocalDownloadsUIState.currentDisplayedTracks.clear();
 
@@ -207,38 +208,45 @@ public final class LocalDownloadsListRenderer {
         }
     }
 
+    /**
+     * YENİ: Lazy pagination listener.
+     *
+     * <p><b>Önceki sorun:</b> {@code setOnTouchListener} her MOVE event'inde
+     * (dokunma sırasında onlarca kez) mesafe hesabı yapıyordu. Ayrıca
+     * {@code LAZY_LISTENERS_INSTALLED} map'i bir ScrollView'a yalnızca BİR kez
+     * listener kurulmasına izin veriyordu — ama bu listener eski {@code filtered}
+     * ve {@code loadedCount} closure'larını yakaladığı için filtre değişince
+     * pagination bozuluyordu (eski filtre listesinden yükleme yapıyordu).</p>
+     *
+     * <p><b>Çözüm:</b> {@code setOnScrollChangeListener} (API 23+) her çağrıda
+     * önceki listener'ı değiştirir — stale closure sorunu yok. Ve sadece scroll
+     * konumu değiştiğinde tetiklenir, dokunma hareketi başına değil.</p>
+     */
     private static void attachLazyScrollListener(final Context ctx, final LocalDownloadsFragment fragment,
                                                  final List<OfflineTrack> filtered,
                                                  final int[] loadedCount, final int totalSize) {
         final ScrollView scroll = findParentScrollView(LocalDownloadsUIState.songsList);
         if (scroll == null) return;
 
-        if (LAZY_LISTENERS_INSTALLED.containsKey(scroll)) return;
-        LAZY_LISTENERS_INSTALLED.put(scroll, Boolean.TRUE);
-
         final int triggerPx = LocalDownloadsUIState.dp(ctx, BOTTOM_TRIGGER_DP);
 
-        scroll.setOnTouchListener(new View.OnTouchListener() {
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                if (event.getAction() == MotionEvent.ACTION_UP || event.getAction() == MotionEvent.ACTION_MOVE) {
-                    if (loadedCount[0] >= totalSize) return false;
-                    View child = scroll.getChildAt(0);
-                    if (child == null) return false;
-                    int distanceFromBottom = child.getHeight() - (scroll.getScrollY() + scroll.getHeight());
-                    if (distanceFromBottom <= triggerPx) {
-                        int next = Math.min(totalSize, loadedCount[0] + PAGE_SIZE);
-                        for (int i = loadedCount[0]; i < next; i++) {
-                            OfflineTrack t = filtered.get(i);
-                            View row = songRow(ctx, t, fragment);
-                            LocalDownloadsUIState.songsList.addView(row);
-                            LocalDownloadsUIState.rowViews.add(row);
-                        }
-                        loadedCount[0] = next;
-                        LocalDownloadsUIState.markPlayingRow(ctx);
-                    }
+        scroll.setOnScrollChangeListener((v, scrollX, scrollY, oldScrollX, oldScrollY) -> {
+            if (loadedCount[0] >= totalSize) return;
+            View child = scroll.getChildAt(0);
+            if (child == null) return;
+            int distanceFromBottom = child.getHeight() - (scrollY + scroll.getHeight());
+            if (distanceFromBottom <= triggerPx) {
+                int next = Math.min(totalSize, loadedCount[0] + PAGE_SIZE);
+                for (int i = loadedCount[0]; i < next; i++) {
+                    OfflineTrack t = filtered.get(i);
+                    View row = songRow(ctx, t, fragment);
+                    LocalDownloadsUIState.songsList.addView(row);
+                    LocalDownloadsUIState.rowViews.add(row);
                 }
-                return false;
+                loadedCount[0] = next;
+                // Yeni satırlar için background atanmalı → fast-path'i bypass et
+                LocalDownloadsUIState.resetRowMarkCache();
+                LocalDownloadsUIState.markPlayingRow(ctx);
             }
         });
     }
@@ -700,6 +708,14 @@ public final class LocalDownloadsListRenderer {
         return headerCard;
     }
 
+    /**
+     * Playlist kapak görselini oluşturur.
+     *
+     * <p><b>YENİ:</b> 4'lü kolaj decode'ları artık {@link LocalDownloadsUIState#ARTWORK_CACHE}
+     * üzerinden cache'lenir. Önceki kod kütüphaneye her dönüşte tüm playlistler için
+     * 4×N decode yapıyordu (N = playlist sayısı). Şimdi sadece ilk render'da decode,
+     * sonrakiler O(1) cache hit.</p>
+     */
     public static ImageView buildPlaylistCoverImageView(Context ctx, OfflineStorage.Playlist pl, int sizePx, int cornerDp) {
         final ImageView iv = LocalDownloadsUIState.artworkView(ctx, null, cornerDp);
         final String cacheKey = "pl_cover_" + pl.name() + "_" + pl.coverPath() + "_" + pl.videoIds().size() + "_" + sizePx + "_" + cornerDp;
@@ -716,9 +732,8 @@ public final class LocalDownloadsListRenderer {
 
         final OfflineStorage.Playlist fPl = pl;
         final int fSize = sizePx;
+        final int tileSize = fSize / 2 + 32;
 
-        // DÜZELTME: submitOnBackgroundThread bir değer döndüren lambda (Callable) beklediği için
-        // geleneksel Runnable yerine lambda kullanıldı ve sonuna return null; eklendi.
         Utils.submitOnBackgroundThread(() -> {
             Bitmap result = null;
             if (fPl.coverPath() != null && !fPl.coverPath().isEmpty()) {
@@ -730,7 +745,14 @@ public final class LocalDownloadsListRenderer {
                 for (String id : fPl.videoIds()) {
                     OfflineTrack t = LocalDownloadsUIState.findById(id);
                     if (t != null) {
-                        Bitmap b = t.artwork(fSize / 2 + 32);
+                        // YENİ: Tek tek tile decode'ları da cache'le → örn. "Tüm Şarkılar"
+                        // ve "Beğenilenler" aynı track'leri paylaşıyorsa tekrar decode yok.
+                        final String tileKey = t.videoId() + "_" + tileSize;
+                        Bitmap b = LocalDownloadsUIState.ARTWORK_CACHE.get(tileKey);
+                        if (b == null) {
+                            b = t.artwork(tileSize);
+                            if (b != null) LocalDownloadsUIState.ARTWORK_CACHE.put(tileKey, b);
+                        }
                         if (b != null) tiles.add(b);
                     }
                     if (tiles.size() >= 4) break;

@@ -9,6 +9,8 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
@@ -37,6 +39,9 @@ import app.morphe.extension.shared.Utils;
 import app.morphe.extension.shared.ui.CustomDialog;
 
 public final class LocalDownloadsDialogs {
+
+    // YENİ: Queue signature — full rebuild atlama için
+    private static String lastQueueSignature = "";
 
     private LocalDownloadsDialogs() {}
 
@@ -80,7 +85,6 @@ public final class LocalDownloadsDialogs {
         topRow.addView(closeBtn, new LinearLayout.LayoutParams(LocalDownloadsUIState.dp(activity, 36), LocalDownloadsUIState.dp(activity, 36)));
         sheet.addView(topRow, new LinearLayout.LayoutParams(-1, -2));
 
-        // 1. Tema Paletleri
         TextView secTheme = LocalDownloadsUIState.text(activity, "🎨 Uygulama Tema Paleti", 14, LocalDownloadsUIState.activeAccentColor());
         secTheme.setTypeface(Typeface.DEFAULT_BOLD);
         secTheme.setPadding(0, LocalDownloadsUIState.dp(activity, 14), 0, LocalDownloadsUIState.dp(activity, 8));
@@ -121,7 +125,6 @@ public final class LocalDownloadsDialogs {
             sheet.addView(themeRow);
         }
 
-        // 1b. HEX Renk Özelleştirmesi
         TextView secHex = LocalDownloadsUIState.text(activity, "🎨 Özel HEX Renkleri", 14, LocalDownloadsUIState.activeAccentColor());
         secHex.setTypeface(Typeface.DEFAULT_BOLD);
         secHex.setPadding(0, LocalDownloadsUIState.dp(activity, 14), 0, LocalDownloadsUIState.dp(activity, 8));
@@ -139,7 +142,6 @@ public final class LocalDownloadsDialogs {
             Utils.showToastShort("HEX renkler sıfırlandı");
         });
 
-        // 2. Özel Duvar Kağıdı & Animasyon Profili
         TextView secWall = LocalDownloadsUIState.text(activity, "🖼️ Duvar Kağıdı & Animasyon Stili", 14, LocalDownloadsUIState.activeAccentColor());
         secWall.setTypeface(Typeface.DEFAULT_BOLD);
         secWall.setPadding(0, LocalDownloadsUIState.dp(activity, 14), 0, LocalDownloadsUIState.dp(activity, 8));
@@ -190,7 +192,6 @@ public final class LocalDownloadsDialogs {
         addSettingsActionItem(activity, sheet, "🎧 Kulaklık Kontrollerini Özelleştir", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showHeadphoneControlsDialog(activity)));
         addSettingsActionItem(activity, sheet, "🎚️ Ekolayzer, Bass & Hız Kontrolü", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showEqualizerDialog(activity)));
 
-        // 3. İndirme, Otomatik Analiz ve Önbellek Yönetimi
         TextView secCache = LocalDownloadsUIState.text(activity, "📦 Akıllı İndirme ve Önbellek Yönetimi", 14, LocalDownloadsUIState.activeAccentColor());
         secCache.setTypeface(Typeface.DEFAULT_BOLD);
         secCache.setPadding(0, LocalDownloadsUIState.dp(activity, 16), 0, LocalDownloadsUIState.dp(activity, 8));
@@ -740,7 +741,8 @@ public final class LocalDownloadsDialogs {
         LocalDownloadsUIState.queueDialogPauseBtn = LocalDownloadsUIState.createPillButton(act, LocalDownloadManager.isPaused() ? "▶ Devam Ettir" : "⏸ Tümünü Duraklat", false);
         LocalDownloadsUIState.queueDialogPauseBtn.setOnClickListener(v -> {
             LocalDownloadManager.setPaused(!LocalDownloadManager.isPaused());
-            fragment.refreshDownloadStatusUI();
+            // YENİ: Anında güncelle — throttle'ı atla
+            fragment.refreshDownloadStatusUIImmediate();
         });
         actionRow.addView(LocalDownloadsUIState.queueDialogPauseBtn);
 
@@ -751,7 +753,7 @@ public final class LocalDownloadsDialogs {
         retryFailedBtn.setOnClickListener(v -> {
             int count = LocalDownloadManager.retryFailedDownloads();
             Utils.showToastShort(count > 0 ? count + " hatalı indirme yeniden başlatıldı" : "Hatalı indirme yok");
-            fragment.refreshDownloadStatusUI();
+            fragment.refreshDownloadStatusUIImmediate();
         });
         actionRow.addView(retryFailedBtn);
 
@@ -763,7 +765,7 @@ public final class LocalDownloadsDialogs {
             LocalDownloadManager.cancelAllDownloads(musicRoot);
             fragment.cleanPartFiles();
             Utils.showToastShort("Tüm indirmeler iptal edildi ve kalıntılar silindi");
-            fragment.refreshDownloadStatusUI();
+            fragment.refreshDownloadStatusUIImmediate();
         });
         actionRow.addView(cancelAllBtn);
         actionScroll.addView(actionRow);
@@ -797,25 +799,55 @@ public final class LocalDownloadsDialogs {
         if (LocalDownloadsUIState.queueManagerDialog.getWindow() != null) LocalDownloadsUIState.queueManagerDialog.getWindow().setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
         closeBtn.setOnClickListener(v -> LocalDownloadsUIState.queueManagerDialog.dismiss());
 
+        // YENİ: Yeni dialog açılırken signature sıfırla
+        lastQueueSignature = "";
+
         populateQueueDialogItems(act, LocalDownloadManager.getQueueSnapshot(), LocalDownloadManager.isPaused(), fragment);
         LocalDownloadsUIState.queueManagerDialog.show();
     }
 
+    /**
+     * Kuyruk diyaloğunu doldurur.
+     *
+     * <p><b>YENİ:</b> Signature-based skip. Kuyruk item seti değişmediyse
+     * (sadece progress değişmişse) full rebuild atlanır; sadece alt TextView'ler
+     * {@code setText} ile güncellenir. Önceki kod her 850ms'de 100 satır
+     * yeniden oluşturuyordu.</p>
+     */
     public static void populateQueueDialogItems(Activity act, List<LocalDownloadManager.QueueItem> queue, boolean paused, LocalDownloadsFragment fragment) {
         if (act == null || LocalDownloadsUIState.queueDialogListContainer == null) return;
         File musicRoot = fragment.getMusicRoot();
-        LocalDownloadsUIState.queueDialogListContainer.removeAllViews();
-
-        if (LocalDownloadsUIState.queueDialogPauseBtn != null) LocalDownloadsUIState.queueDialogPauseBtn.setText(paused ? "▶ Devam Ettir" : "⏸ Tümünü Duraklat");
 
         List<LocalDownloadManager.QueueItem> failedItems = LocalDownloadManager.getFailedSnapshot();
         long totalSpeed = LocalDownloadManager.getTotalActiveSpeedBytesPerSec();
 
+        // YENİ: Signature oluştur (item seti + active flag + failed seti)
+        StringBuilder sigBuilder = new StringBuilder(256);
+        for (LocalDownloadManager.QueueItem qi : queue) {
+            sigBuilder.append(qi.videoId()).append(':').append(qi.active() ? '1' : '0').append('|');
+        }
+        sigBuilder.append("FAIL:");
+        for (LocalDownloadManager.QueueItem f : failedItems) {
+            sigBuilder.append(f.videoId()).append('|');
+        }
+        String newSig = sigBuilder.toString();
+
+        // Summary her zaman güncelle (hafif)
+        if (LocalDownloadsUIState.queueDialogPauseBtn != null) LocalDownloadsUIState.queueDialogPauseBtn.setText(paused ? "▶ Devam Ettir" : "⏸ Tümünü Duraklat");
         if (LocalDownloadsUIState.queueDialogSummaryText != null) {
             String stats = "Aktif: " + LocalDownloadManager.getActiveDownloadCount() + " • Sırada: " + queue.size() + " • Tamamlanan: " + LocalDownloadManager.getCompletedSessionCount() + " • Hatalı: " + failedItems.size();
             if (totalSpeed > 0) stats += "\n⚡ Anlık Toplam Hız: " + LocalDownloadsUIState.formatSpeed(totalSpeed);
             LocalDownloadsUIState.queueDialogSummaryText.setText(stats);
         }
+
+        // YENİ: Signature aynıysa full rebuild atla, sadece progress metinlerini güncelle
+        if (newSig.equals(lastQueueSignature)) {
+            updateQueueProgressInPlace(queue);
+            return;
+        }
+        lastQueueSignature = newSig;
+
+        LocalDownloadsUIState.queueDialogListContainer.removeAllViews();
 
         if (queue.isEmpty() && failedItems.isEmpty()) {
             TextView empty = LocalDownloadsUIState.text(act, "İndirme kuyruğu temiz ✨", 14, LocalDownloadsUIState.secondary());
@@ -833,6 +865,8 @@ public final class LocalDownloadsDialogs {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(LocalDownloadsUIState.dp(act, 8), LocalDownloadsUIState.dp(act, 7), LocalDownloadsUIState.dp(act, 8), LocalDownloadsUIState.dp(act, 7));
             row.setBackground(LocalDownloadsUIState.rowBackground(act, item.active()));
+            // YENİ: row tag = videoId → in-place güncelleme için
+            row.setTag(item.videoId());
 
             LinearLayout col = new LinearLayout(act);
             col.setOrientation(LinearLayout.VERTICAL);
@@ -846,6 +880,8 @@ public final class LocalDownloadsDialogs {
             String subTxt = item.playlistName() + (item.active() ? " • %" + item.progress() + sizeDetail + speedDetail : " • Sırada bekliyor");
             TextView s = LocalDownloadsUIState.text(act, subTxt, 11, LocalDownloadsUIState.secondary());
             s.setSingleLine(true);
+            // YENİ: sub tag → in-place güncelleme
+            s.setTag("progress_sub_" + item.videoId());
             col.addView(t);
             col.addView(s);
             row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
@@ -858,7 +894,7 @@ public final class LocalDownloadsDialogs {
                 prioBtn.setOnClickListener(v -> {
                     LocalDownloadManager.prioritizeInQueue(item.videoId());
                     Utils.showToastShort("Kuyrukta ilk sıraya taşındı");
-                    fragment.refreshDownloadStatusUI();
+                    fragment.refreshDownloadStatusUIImmediate();
                 });
                 row.addView(prioBtn);
             }
@@ -868,7 +904,7 @@ public final class LocalDownloadsDialogs {
                 LocalDownloadManager.removeFromQueue(item.videoId());
                 OfflineStorage.delete(new File(musicRoot, item.videoId() + ".webm.part"));
                 OfflineStorage.delete(new File(musicRoot, item.videoId() + ".m4a.part"));
-                fragment.refreshDownloadStatusUI();
+                fragment.refreshDownloadStatusUIImmediate();
             });
             row.addView(removeBtn);
 
@@ -881,6 +917,7 @@ public final class LocalDownloadsDialogs {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setPadding(LocalDownloadsUIState.dp(act, 8), LocalDownloadsUIState.dp(act, 7), LocalDownloadsUIState.dp(act, 8), LocalDownloadsUIState.dp(act, 7));
             row.setBackground(LocalDownloadsUIState.rowBackground(act, false));
+            row.setTag("failed_" + failed.videoId());
 
             LinearLayout col = new LinearLayout(act);
             col.setOrientation(LinearLayout.VERTICAL);
@@ -895,10 +932,38 @@ public final class LocalDownloadsDialogs {
             retryOne.setOnClickListener(v -> {
                 LocalDownloadManager.removeFromQueue(failed.videoId());
                 LocalDownloadManager.enqueue(failed.videoId(), failed.playlistName(), true);
-                fragment.refreshDownloadStatusUI();
+                fragment.refreshDownloadStatusUIImmediate();
             });
             row.addView(retryOne);
             LocalDownloadsUIState.queueDialogListContainer.addView(row);
+        }
+    }
+
+    /**
+     * YENİ: Aynı kuyruk setinde sadece progress/speed TextView'larını günceller.
+     * Full rebuild yapmadan mevcut view hiyerarşisini kullanır.
+     */
+    private static void updateQueueProgressInPlace(List<LocalDownloadManager.QueueItem> queue) {
+        if (LocalDownloadsUIState.queueDialogListContainer == null) return;
+        for (int i = 0; i < LocalDownloadsUIState.queueDialogListContainer.getChildCount(); i++) {
+            View row = LocalDownloadsUIState.queueDialogListContainer.getChildAt(i);
+            if (row == null) continue;
+            Object tag = row.getTag();
+            if (!(tag instanceof String videoId)) continue;
+            if (videoId.startsWith("failed_")) continue;
+
+            LocalDownloadManager.QueueItem item = null;
+            for (LocalDownloadManager.QueueItem qi : queue) {
+                if (qi.videoId().equals(videoId)) { item = qi; break; }
+            }
+            if (item == null) continue;
+
+            View sub = row.findViewWithTag("progress_sub_" + videoId);
+            if (sub instanceof TextView tv) {
+                String sizeDetail = item.totalBytes() > 0 ? " • " + LocalDownloadsUIState.formatSize(item.downloadedBytes()) + "/" + LocalDownloadsUIState.formatSize(item.totalBytes()) + " MB" : "";
+                String speedDetail = item.active() && item.speedBytesPerSec() > 0 ? " • " + LocalDownloadsUIState.formatSpeed(item.speedBytesPerSec()) : "";
+                tv.setText(item.playlistName() + (item.active() ? " • %" + item.progress() + sizeDetail + speedDetail : " • Sırada bekliyor"));
+            }
         }
     }
 
@@ -1052,16 +1117,18 @@ public final class LocalDownloadsDialogs {
         };
         renderRef[0].run();
 
+        // YENİ: Filter debounce — her keystroke'ta full rebuild yerine 250ms'de 1
+        final Handler filterHandler = new Handler(Looper.getMainLooper());
         filterInput.addTextChangedListener(new android.text.TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
                 filterText[0] = s == null ? "" : s.toString().trim().toLowerCase(Locale.ROOT);
-                renderRef[0].run();
+                filterHandler.removeCallbacksAndMessages(null);
+                filterHandler.postDelayed(renderRef[0], 250L);
             }
             @Override public void afterTextChanged(android.text.Editable s) {}
         });
 
-        // ==== Sıfırla & Yeniden Çek (LRCLIB → YT Music) ====
         TextView resetYtBtn = LocalDownloadsUIState.createPillButton(activity, "🔄 Tüm Sözleri Sıfırla & Yeniden Çek", false);
         resetYtBtn.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams resetLp = new LinearLayout.LayoutParams(-1, -2);
@@ -1100,7 +1167,9 @@ public final class LocalDownloadsDialogs {
         AlertDialog dialog = new AlertDialog.Builder(activity).setView(panel).create();
         close.setOnClickListener(v -> dialog.dismiss());
 
-        // ==== Tüm Sözleri Sıfırla & Yeniden Çek (LRCLIB → YT Music) ====
+        // YENİ: Dialog kapanınca pending filter render'ı iptal et
+        dialog.setOnDismissListener(d -> filterHandler.removeCallbacksAndMessages(null));
+
         resetYtBtn.setOnClickListener(v -> {
             new AlertDialog.Builder(activity)
                     .setTitle("Tüm Sözleri Sıfırla & Yeniden Çek")
@@ -1714,7 +1783,6 @@ public final class LocalDownloadsDialogs {
         addBottomSheetListRow(activity, sheet, "🔍", "Söz / Türkçe Şiir Elle Ara", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showManualLyricsSearchDialog(activity, track, null, fragment)));
         addBottomSheetListRow(activity, sheet, "📝", "Söz / Şiir Yapıştır / Düzenle", () -> LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> showManualLyricsPasteDialog(activity, track, null, fragment)));
 
-        // ==== YENİ: Sözleri Sil & Yeniden Çek (LRCLIB → YT Music) ====
         addBottomSheetListRow(activity, sheet, "🔄", "Sözleri Sil & Yeniden Çek (LRCLIB → YT)", () ->
                 LocalDownloadsAnimator.animateBottomSheetDismiss(sheet, overlay, dialog, screenH, () -> {
                     File lrcFile = new File(musicRoot, track.videoId() + ".lrc");
@@ -1996,7 +2064,7 @@ public final class LocalDownloadsDialogs {
             }
             dialog.dismiss();
             fragment.showTracks();
-            fragment.refreshDownloadStatusUI();
+            fragment.refreshDownloadStatusUIImmediate();
         });
         dialog.show();
     }
@@ -2055,7 +2123,7 @@ public final class LocalDownloadsDialogs {
                     for (LocalDownloadManager.QueueItem qi : LocalDownloadManager.getQueueSnapshot()) {
                         if (pl.name().equalsIgnoreCase(qi.playlistName())) { LocalDownloadManager.removeFromQueue(qi.videoId()); removed++; }
                     }
-                    fragment.refreshDownloadStatusUI();
+                    fragment.refreshDownloadStatusUIImmediate();
                     Utils.showToastShort(removed + " bekleyen indirme iptal edildi");
                 }
                 case 5 -> fragment.confirmDeletePlaylist(pl.name());
